@@ -1,0 +1,33 @@
+[project]
+name = "thesis-tracker"
+version = "0.1.0"
+description = "Stock research AI agent"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "edgartools>=5.57.0",
+    "openai>=3.13.0",
+    "pydantic>=2.13.5",
+    "python-dotenv>=1.2.3",
+    "tqdm>=4.70.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.11,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.7",
+]
