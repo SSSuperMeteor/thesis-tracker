@@ -1,0 +1,562 @@
+[
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "segment",
+    "question": "How did revenue and operating income change across AMD's Data Center, Client and Gaming, and Embedded segments?",
+    "expected_chunk_id": "0000002488-26-000123::note::03::segment_reporting",
+    "expected_section": "Segment Reporting"
+  },
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "Why did AMD's gross margin increase in the second quarter of 2026?",
+    "expected_chunk_id": "0000002488-26-000123::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What inventory balances did AMD report in its supplemental financial statement information?",
+    "expected_chunk_id": "0000002488-26-000123::note::02::supplemental_financial_statement_information",
+    "expected_section": "Supplemental Financial Statement Information"
+  },
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "Does management expect available cash and borrowing capacity to fund operations, capital expenditures, and commitments?",
+    "expected_chunk_id": "0000002488-26-000123::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "What demand and revenue trends did AMD describe for its Data Center, Client and Gaming, and Embedded businesses?",
+    "expected_chunk_id": "0000002488-26-000123::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "risk",
+    "question": "What material risks does AMD identify from export controls, competition, and reliance on its supply chain?",
+    "expected_chunk_id": "0000002488-26-000123::part_ii_item_1a",
+    "expected_section": "Part II, Item 1A"
+  },
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "legal",
+    "question": "What commitments, contingencies, and legal matters does AMD disclose?",
+    "expected_chunk_id": "0000002488-26-000123::note::09::commitments_and_contingencies",
+    "expected_section": "Commitments and Contingencies"
+  },
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "segment",
+    "question": "How does AMD define its reportable segments and allocate revenue among them?",
+    "expected_chunk_id": "0000002488-26-000123::note::03::segment_reporting",
+    "expected_section": "Segment Reporting"
+  },
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What senior notes, revolving credit facility, and commercial paper obligations does AMD have?",
+    "expected_chunk_id": "0000002488-26-000123::note::08::debt_revolving_credit_facility_and_commercial_pape",
+    "expected_section": "Debt, Revolving Credit Facility and Commercial Paper Program"
+  },
+  {
+    "ticker": "AMD",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What did AMD disclose about common stock and stock-based compensation expense?",
+    "expected_chunk_id": "0000002488-26-000123::note::11::common_stock_and_stock_based_compensation",
+    "expected_section": "Common Stock and Stock-based Compensation"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "Which product and end-market trends drove Lumentum's quarterly revenue change?",
+    "expected_chunk_id": "0001628280-26-030777::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "What factors affected Lumentum's gross margin and profitability?",
+    "expected_chunk_id": "0001628280-26-030777::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What inventory and other balance sheet details did Lumentum report?",
+    "expected_chunk_id": "0001628280-26-030777::note::06::balance_sheet_details",
+    "expected_section": "Balance Sheet Details"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "What is management's outlook for cloud, AI, machine learning, and data center demand?",
+    "expected_chunk_id": "0001628280-26-030777::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "How is accelerating demand for optical modules affecting Lumentum's business?",
+    "expected_chunk_id": "0001628280-26-030777::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "risk",
+    "question": "What risk factors does Lumentum report regarding customers, supply, competition, and demand volatility?",
+    "expected_chunk_id": "0001628280-26-030777::part_ii_item_1a",
+    "expected_section": "Part II, Item 1A"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "How is Lumentum investing in manufacturing capacity and capital expenditures to meet demand?",
+    "expected_chunk_id": "0001628280-26-030777::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "segment",
+    "question": "What customer and end-market concentration does Lumentum describe in its operating results?",
+    "expected_chunk_id": "0001628280-26-030777::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What debt instruments, maturities, and borrowing obligations does Lumentum disclose?",
+    "expected_chunk_id": "0001628280-26-030777::note::08::debt",
+    "expected_section": "Debt"
+  },
+  {
+    "ticker": "LITE",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What restructuring charges and reversals did Lumentum recognize?",
+    "expected_chunk_id": "0001628280-26-030777::note::10::restructuring_and_related_charges_reversals",
+    "expected_section": "Restructuring and Related Charges (Reversals)"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "What drove NVIDIA's Data Center revenue growth and how important were Blackwell products?",
+    "expected_chunk_id": "0001045810-26-000075::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "Why did NVIDIA's gross margin change during the quarter?",
+    "expected_chunk_id": "0001045810-26-000075::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What inventory purchase and capacity commitments has NVIDIA made to support future supply?",
+    "expected_chunk_id": "0001045810-26-000075::note::09::commitments_and_contingencies",
+    "expected_section": "Commitments and Contingencies"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "What does management say about future demand for Blackwell and next-generation AI infrastructure?",
+    "expected_chunk_id": "0001045810-26-000075::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "How could customer data center infrastructure and capital constraints affect NVIDIA demand?",
+    "expected_chunk_id": "0001045810-26-000075::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "risk",
+    "question": "What material risks does NVIDIA identify for export controls, supply, and AI market competition?",
+    "expected_chunk_id": "0001045810-26-000075::part_ii_item_1a",
+    "expected_section": "Part II, Item 1A"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What supply, manufacturing capacity, and other commitments does NVIDIA disclose?",
+    "expected_chunk_id": "0001045810-26-000075::note::09::commitments_and_contingencies",
+    "expected_section": "Commitments and Contingencies"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "segment",
+    "question": "How does NVIDIA report revenue for its Compute and Networking and Graphics segments?",
+    "expected_chunk_id": "0001045810-26-000075::note::12::segment_information",
+    "expected_section": "Segment Information"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What outstanding debt and senior note obligations does NVIDIA report?",
+    "expected_chunk_id": "0001045810-26-000075::note::08::debt",
+    "expected_section": "Debt"
+  },
+  {
+    "ticker": "NVDA",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "How many NVIDIA shares were repurchased and how much repurchase authorization remained?",
+    "expected_chunk_id": "0001045810-26-000075::part_ii_item_2",
+    "expected_section": "Part II, Item 2"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "How much of Oracle's revenue comes from cloud services and license support and other software businesses?",
+    "expected_chunk_id": "0001193125-26-389274::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "What factors affected Oracle's operating income and profitability?",
+    "expected_chunk_id": "0001193125-26-389274::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What property, plant and equipment balances and additions did Oracle report?",
+    "expected_chunk_id": "0001193125-26-389274::note::04::property_plant_and_equipment",
+    "expected_section": "PROPERTY, PLANT AND EQUIPMENT"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "What does Oracle management expect for cloud demand, capital expenditures, and future cash needs?",
+    "expected_chunk_id": "0001193125-26-389274::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "How is customer demand for Oracle cloud infrastructure affecting growth and investment?",
+    "expected_chunk_id": "0001193125-26-389274::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "risk",
+    "question": "What changes to Oracle's risk factors were reported in this quarter?",
+    "expected_chunk_id": "0001193125-26-389274::part_ii_item_1a",
+    "expected_section": "Part II, Item 1A"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What lease liabilities and other contractual commitments does Oracle disclose?",
+    "expected_chunk_id": "0001193125-26-389274::note::07::leases_and_other_commitments",
+    "expected_section": "LEASES AND OTHER COMMITMENTS"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "segment",
+    "question": "How does Oracle report revenue and operating results by segment?",
+    "expected_chunk_id": "0001193125-26-389274::note::10::segment_information",
+    "expected_section": "SEGMENT INFORMATION"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "How does Oracle expect to fund operations, debt obligations, and capital expenditures?",
+    "expected_chunk_id": "0001193125-26-389274::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "ORCL",
+    "form_type": "10-Q",
+    "question_type": "legal",
+    "question": "What material legal proceedings and contingencies does Oracle disclose?",
+    "expected_chunk_id": "0001193125-26-389274::note::12::legal_proceedings",
+    "expected_section": "LEGAL PROCEEDINGS"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "How does Sandisk recognize revenue and what contract assets or liabilities did it report?",
+    "expected_chunk_id": "0001628280-26-029401::note::03::revenue",
+    "expected_section": "Revenue"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "Why did Sandisk's gross profit and gross margin change?",
+    "expected_chunk_id": "0001628280-26-029401::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What inventory and working capital balances did Sandisk report?",
+    "expected_chunk_id": "0001628280-26-029401::note::04::supplemental_financial_statement_data",
+    "expected_section": "Supplemental Financial Statement Data"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "What pricing and demand trends does Sandisk expect through the rest of 2026?",
+    "expected_chunk_id": "0001628280-26-029401::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "How is AI infrastructure demand affecting NAND flash storage demand at Sandisk?",
+    "expected_chunk_id": "0001628280-26-029401::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "risk",
+    "question": "What material changes to Sandisk's risk factors were disclosed?",
+    "expected_chunk_id": "0001628280-26-029401::part_ii_item_1a",
+    "expected_section": "Part II, Item 1A"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What related-party supply commitments and contingencies does Sandisk have?",
+    "expected_chunk_id": "0001628280-26-029401::note::09::related_parties_and_related_commitments_and_contin",
+    "expected_section": "Related Parties and Related Commitments and Contingencies"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "segment",
+    "question": "What geographic and customer concentration risks does Sandisk disclose?",
+    "expected_chunk_id": "0001628280-26-029401::note::02::geographic_information_and_concentrations_of_risk",
+    "expected_section": "Geographic Information and Concentrations of Risk"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What debt balances, interest rates, and maturities does Sandisk report?",
+    "expected_chunk_id": "0001628280-26-029401::note::07::debt",
+    "expected_section": "Debt"
+  },
+  {
+    "ticker": "SNDK",
+    "form_type": "10-Q",
+    "question_type": "legal",
+    "question": "What legal proceedings does Sandisk disclose?",
+    "expected_chunk_id": "0001628280-26-029401::note::14::legal_proceedings",
+    "expected_section": "Legal Proceedings"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "How did Tesla's automotive and total revenues change during the quarter?",
+    "expected_chunk_id": "0001628280-26-049270::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "What factors affected Tesla's automotive and total gross margin?",
+    "expected_chunk_id": "0001628280-26-049270::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What finished goods, work in process, raw materials, and total inventory did Tesla report?",
+    "expected_chunk_id": "0001628280-26-049270::note::03::inventory",
+    "expected_section": "Inventory"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "What is Tesla management's outlook for growth, profitability, and product ramp timing?",
+    "expected_chunk_id": "0001628280-26-049270::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "How could tariffs, affordability, and changing customer demand affect Tesla?",
+    "expected_chunk_id": "0001628280-26-049270::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "risk",
+    "question": "What changes to Tesla's risk factors were reported this quarter?",
+    "expected_chunk_id": "0001628280-26-049270::part_ii_item_1a",
+    "expected_section": "Part II, Item 1A"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What property, plant and equipment balances support Tesla's manufacturing and AI infrastructure investment?",
+    "expected_chunk_id": "0001628280-26-049270::note::04::property_plant_and_equipment_net",
+    "expected_section": "Property, Plant and Equipment, Net"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "segment",
+    "question": "How does Tesla report automotive and energy generation and storage segment revenue?",
+    "expected_chunk_id": "0001628280-26-049270::note::13::segment_reporting_and_information_about_geographic",
+    "expected_section": "Segment Reporting and Information about Geographic Areas"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What debt balances, credit agreements, and maturities does Tesla disclose?",
+    "expected_chunk_id": "0001628280-26-049270::note::07::debt",
+    "expected_section": "Debt"
+  },
+  {
+    "ticker": "TSLA",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What stock-based compensation and equity incentive plan expense did Tesla report?",
+    "expected_chunk_id": "0001628280-26-049270::note::08::equity_incentive_plans",
+    "expected_section": "Equity Incentive Plans"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "How does Vertiv recognize revenue and what remaining performance obligations did it report?",
+    "expected_chunk_id": "0001628280-26-050609::note::03::revenue",
+    "expected_section": "REVENUE"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "numeric / financial",
+    "question": "What factors drove Vertiv's operating profit and profitability changes?",
+    "expected_chunk_id": "0001628280-26-050609::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What inventory balances did Vertiv report in other financial information?",
+    "expected_chunk_id": "0001628280-26-050609::note::07::other_financial_information",
+    "expected_section": "OTHER FINANCIAL INFORMATION"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "What does Vertiv's backlog indicate about management's outlook for future sales?",
+    "expected_chunk_id": "0001628280-26-050609::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "semantic outlook",
+    "question": "How is data center and AI infrastructure demand affecting Vertiv's orders and capacity plans?",
+    "expected_chunk_id": "0001628280-26-050609::part_i_item_2",
+    "expected_section": "Part I, Item 2"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "risk",
+    "question": "What material risk factor changes does Vertiv report for supply chain, customers, and demand?",
+    "expected_chunk_id": "0001628280-26-050609::part_ii_item_1a",
+    "expected_section": "Part II, Item 1A"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What purchase, performance, and other commitments and contingencies does Vertiv disclose?",
+    "expected_chunk_id": "0001628280-26-050609::note::12::commitments_and_contingencies",
+    "expected_section": "COMMITMENTS AND CONTINGENCIES"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "segment",
+    "question": "How does Vertiv report sales and profit across its Americas, Asia Pacific, and EMEA segments?",
+    "expected_chunk_id": "0001628280-26-050609::note::10::segment_information",
+    "expected_section": "SEGMENT INFORMATION"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "capital structure",
+    "question": "What term loans, notes, interest rates, and debt maturities does Vertiv report?",
+    "expected_chunk_id": "0001628280-26-050609::note::05::debt",
+    "expected_section": "DEBT"
+  },
+  {
+    "ticker": "VRT",
+    "form_type": "10-Q",
+    "question_type": "accounting",
+    "question": "What acquisitions did Vertiv complete and how were their assets, liabilities, and goodwill accounted for?",
+    "expected_chunk_id": "0001628280-26-050609::note::02::acquisitions",
+    "expected_section": "ACQUISITIONS"
+  }
+]

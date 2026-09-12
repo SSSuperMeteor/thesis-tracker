@@ -46,6 +46,20 @@ except ImportError:
 
 PARSER_VERSION = f"edgartools-{edgar.__version__}"
 NORMALIZER_VERSION = "norm-1"
+CHUNKING_VERSION = "chunker-v2-overlap"
+
+
+@dataclass(frozen=True)
+class ChunkingConfig:
+    """Centralized boundaries for section-aware overlapping chunks."""
+
+    target_chunk_chars: int = 3000
+    overlap_chars: int = 500
+    end_boundary_window: int = 600
+    overlap_boundary_window: int = 100
+
+
+DEFAULT_CHUNKING_CONFIG = ChunkingConfig()
 
 # schema 加了 ingestion_status
 SCHEMA_VERSION = 3
@@ -337,6 +351,144 @@ class RepairTarget:
     title: str
 
     parser_preview: str
+
+
+# ----------------------------------------------------------------
+# Section-aware overlap chunking
+# ----------------------------------------------------------------
+
+_PARAGRAPH_BOUNDARY_RE = re.compile(r"\n[ \t]*\n")
+_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?][\"')\]]?(?:\s+|$)")
+
+
+def split_text_spans(
+    text: str,
+    config: ChunkingConfig = DEFAULT_CHUNKING_CONFIG,
+) -> list[tuple[int, int]]:
+    """Split one section/note into overlapping spans at natural boundaries."""
+    if config.target_chunk_chars <= 0:
+        raise ValueError("target_chunk_chars must be greater than zero")
+    if not 0 <= config.overlap_chars < config.target_chunk_chars:
+        raise ValueError("overlap_chars must be smaller than target_chunk_chars")
+    if not text:
+        return []
+    if len(text) <= config.target_chunk_chars:
+        return [(0, len(text))]
+
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while start < len(text):
+        preferred_end = start + config.target_chunk_chars
+        if preferred_end >= len(text):
+            end = len(text)
+        else:
+            end = _choose_natural_boundary(
+                text,
+                preferred=preferred_end,
+                low=max(start + 1, preferred_end - config.end_boundary_window),
+                high=min(len(text), preferred_end + config.end_boundary_window),
+            )
+        if end <= start:
+            end = min(len(text), preferred_end)
+        spans.append((start, end))
+        if end == len(text):
+            break
+
+        preferred_start = end - config.overlap_chars
+        next_start = _choose_natural_boundary(
+            text,
+            preferred=preferred_start,
+            low=max(start + 1, preferred_start - config.overlap_boundary_window),
+            high=min(end - 1, preferred_start + config.overlap_boundary_window),
+        )
+        if next_start <= start or next_start >= end:
+            next_start = preferred_start
+        start = next_start
+    return spans
+
+
+def apply_chunking_v2(
+    base_chunks: list[Chunk],
+    config: ChunkingConfig = DEFAULT_CHUNKING_CONFIG,
+) -> list[Chunk]:
+    """Expand canonical section/note chunks without crossing their boundaries."""
+    expanded: list[Chunk] = []
+    children_by_base_id: dict[str, list[Chunk]] = {}
+
+    for base in base_chunks:
+        local_spans = (
+            split_text_spans(base.text, config)
+            if base.span_verified
+            else [(0, len(base.text))]
+        )
+        children = []
+        for index, (local_start, local_end) in enumerate(local_spans):
+            text = base.text[local_start:local_end]
+            absolute_span = (
+                base.char_span[0] + local_start,
+                base.char_span[0] + local_end,
+            ) if base.span_verified else base.char_span
+            child = Chunk(
+                chunk_id=f"{base.chunk_id}::chunk_{index:03d}",
+                doc_hash=base.doc_hash,
+                kind=base.kind,
+                section_key=base.section_key,
+                title=base.title,
+                text=text,
+                text_hash=sha256(text),
+                char_span=absolute_span,
+                span_verified=base.span_verified,
+                extraction_method=(
+                    f"{base.extraction_method}|{CHUNKING_VERSION}"
+                ),
+                parent_id=base.parent_id,
+            )
+            children.append(child)
+            expanded.append(child)
+        children_by_base_id[base.chunk_id] = children
+
+    for child in expanded:
+        possible_parents = children_by_base_id.get(child.parent_id or "", [])
+        if not possible_parents:
+            continue
+        child.parent_id = next(
+            (
+                parent.chunk_id
+                for parent in possible_parents
+                if parent.char_span[0] <= child.char_span[0] < parent.char_span[1]
+            ),
+            possible_parents[0].chunk_id,
+        )
+
+    for order, child in enumerate(expanded):
+        child.order = order
+        child.prev_id = expanded[order - 1].chunk_id if order else None
+        child.next_id = (
+            expanded[order + 1].chunk_id
+            if order + 1 < len(expanded)
+            else None
+        )
+    return expanded
+
+
+def _choose_natural_boundary(
+    text: str,
+    *,
+    preferred: int,
+    low: int,
+    high: int,
+) -> int:
+    if low >= high:
+        return preferred
+    boundary_groups = (
+        [match.end() for match in _PARAGRAPH_BOUNDARY_RE.finditer(text, low, high)],
+        [index + 1 for index in range(low, high) if text[index] == "\n"],
+        [match.end() for match in _SENTENCE_BOUNDARY_RE.finditer(text, low, high)],
+    )
+    for boundaries in boundary_groups:
+        if boundaries:
+            return min(boundaries, key=lambda position: abs(position - preferred))
+    return preferred
 
 
 # ----------------------------------------------------------------
@@ -1911,7 +2063,13 @@ def _build(
         )
 
     # ============================================================
-    # 7. chunk order / links
+    # 7. Section-aware overlap chunking
+    # ============================================================
+
+    doc.chunks = apply_chunking_v2(doc.chunks)
+
+    # ============================================================
+    # 8. chunk order / links
     # ============================================================
 
     for i, chunk in enumerate(
@@ -2086,7 +2244,8 @@ def assert_sane(
             )
 
     # ============================================================
-    # Section 之间不能重叠
+    # 不同 logical section 之间不能重叠。同一 section 的 v2 子块
+    # 按设计允许 overlap。
     # ============================================================
 
     verified_sections = sorted(
@@ -2104,6 +2263,8 @@ def assert_sane(
     ):
 
         if (
+            left.section_key != right.section_key
+            and
             left.char_span[1]
             > right.char_span[0]
         ):

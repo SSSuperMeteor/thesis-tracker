@@ -5,10 +5,13 @@ description = "Stock research AI agent"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "chromadb>=1.5.9",
+    "dashscope>=1.24.6",
     "edgartools>=5.57.0",
     "openai>=3.13.0",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.3",
+    "rank-bm25>=0.2.2",
     "tqdm>=4.70.1",
 ]
 

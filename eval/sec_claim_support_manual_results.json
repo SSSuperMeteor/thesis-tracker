@@ -1,0 +1,78 @@
+{
+  "model": "deepseek-chat",
+  "database": "data/corpus.db",
+  "filing": {
+    "ticker": "AMD",
+    "accession": "0000002488-26-000123",
+    "form_type": "10-Q"
+  },
+  "cases": [
+    {
+      "id": "A_direct",
+      "chunk_id": "0000002488-26-000123::part_i_item_2",
+      "claim": "AMD Data Center net revenue increased by 107% year over year for the three months ended June 27, 2026.",
+      "evidence_text": "Data Center net revenue of $6.7 billion for the three months ended June 27, 2026 increased by 107%, compared to net revenue of $3.2 billion for the prior year period.",
+      "expected": "supported",
+      "actual": "supported",
+      "confidence": "high",
+      "grounding": "exact_match",
+      "reason": "The evidence directly states Data Center net revenue of $6.7 billion for the three months ended June 27, 2026 increased by 107% year over year, matching the claim exactly."
+    },
+    {
+      "id": "B_slightly_broader",
+      "chunk_id": "0000002488-26-000123::part_i_item_2",
+      "claim": "AMD Data Center net revenue increased by 107% year over year for the three months ended June 27, 2026, and this 107% growth rate also held across the first half of 2026.",
+      "evidence_text": "Data Center net revenue of $6.7 billion for the three months ended June 27, 2026 increased by 107%, compared to net revenue of $3.2 billion for the prior year period.",
+      "expected": "partial",
+      "actual": "partial",
+      "confidence": "high",
+      "grounding": "exact_match",
+      "reason": "The evidence directly supports the first part of the claim: Data Center net revenue increased 107% year over year for the three months ended June 27, 2026. However, the evidence does not address the first half of 2026 or state that the 107% growth rate held across that period, so the second part of the claim is unsupported."
+    },
+    {
+      "id": "C_over_inference",
+      "chunk_id": "0000002488-26-000123::part_i_item_2",
+      "claim": "AMD gained market share because customer demand accelerated sharply during the three months ended June 27, 2026.",
+      "evidence_text": "Data Center net revenue of $6.7 billion for the three months ended June 27, 2026 increased by 107%, compared to net revenue of $3.2 billion for the prior year period.",
+      "expected": "unsupported",
+      "actual": "unsupported",
+      "confidence": "high",
+      "grounding": "exact_match",
+      "reason": "The evidence only reports Data Center net revenue growth of 107% for the period; it does not mention market share gains, customer demand acceleration, or any causal relationship. The claim requires multiple inferences not stated in the evidence."
+    },
+    {
+      "id": "D_changed_number",
+      "chunk_id": "0000002488-26-000123::part_i_item_2",
+      "claim": "AMD Data Center net revenue increased by 117% year over year for the three months ended June 27, 2026.",
+      "evidence_text": "Data Center net revenue of $6.7 billion for the three months ended June 27, 2026 increased by 107%, compared to net revenue of $3.2 billion for the prior year period.",
+      "expected": "unsupported",
+      "actual": "unsupported",
+      "confidence": "high",
+      "grounding": "exact_match",
+      "reason": "The evidence states Data Center net revenue increased by 107% year over year, not 117% as claimed. The percentage mismatch is material."
+    },
+    {
+      "id": "E_forecast_as_actual",
+      "chunk_id": "0000002488-26-000123::part_i_item_2",
+      "claim": "International sales remained a significant portion of AMD total sales after June 27, 2026.",
+      "evidence_text": "We expect that international sales will continue to be a significant portion of total sales in the foreseeable future.",
+      "expected": "unsupported",
+      "actual": "unsupported",
+      "confidence": "high",
+      "grounding": "exact_match",
+      "reason": "The evidence is a forward-looking expectation that international sales will continue to be significant in the foreseeable future; it does not state that international sales remained a significant portion of total sales after June 27, 2026, and the claim's past/realized framing is not supported by the expectation language."
+    },
+    {
+      "id": "F_wrong_chunk",
+      "chunk_id": "0001045810-26-000075::part_i_item_2",
+      "claim": "AMD Data Center net revenue increased by 107% year over year for the three months ended June 27, 2026.",
+      "evidence_text": "Data Center net revenue of $6.7 billion for the three months ended June 27, 2026 increased by 107%, compared to net revenue of $3.2 billion for the prior year period.",
+      "expected": "grounding_failed",
+      "actual": "grounding_failed",
+      "confidence": null,
+      "grounding": "evidence_not_found",
+      "model_run": false,
+      "reason": "grounding_failed"
+    }
+  ]
+}
