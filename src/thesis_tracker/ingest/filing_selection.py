@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Protocol
 
@@ -117,6 +117,7 @@ class FilingMetadata:
     filing_date: date
     report_date: date
     primary_document: str
+    acceptance_datetime: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,8 +190,7 @@ class FilingSelector:
             sorted(
                 families,
                 key=lambda family: (
-                    family.effective.metadata.filing_date,
-                    family.effective.metadata.accession,
+                    _metadata_order_key(family.effective.metadata),
                 ),
                 reverse=True,
             )
@@ -269,6 +269,15 @@ class FilingSelector:
                 SelectionFailureCode.INVALID_METADATA,
                 f"missing primary document for accession {metadata.accession}",
             )
+        if (
+            metadata.acceptance_datetime is not None
+            and metadata.acceptance_datetime.utcoffset() is None
+        ):
+            raise FilingSelectionError(
+                SelectionFailureCode.INVALID_METADATA,
+                "acceptance datetime must include a timezone for "
+                f"{metadata.accession}",
+            )
 
     @staticmethod
     def _build_families(
@@ -303,16 +312,33 @@ class FilingSelector:
                     f"multiple originals for filing family {key}",
                 )
             original = originals[0]
+            family_members = [original, *amendments]
+            members_by_date: dict[date, list[SourceFiling]] = {}
+            for member in family_members:
+                members_by_date.setdefault(
+                    member.metadata.filing_date,
+                    [],
+                ).append(member)
+            if any(
+                len(same_day) > 1
+                and any(
+                    member.metadata.acceptance_datetime is None
+                    for member in same_day
+                )
+                for same_day in members_by_date.values()
+            ):
+                raise FilingSelectionError(
+                    SelectionFailureCode.INVALID_METADATA,
+                    "same-day filing family requires SEC acceptance datetime "
+                    f"for {original.metadata.accession}",
+                )
             ordered_amendments = sorted(
                 amendments,
-                key=lambda item: (
-                    item.metadata.filing_date,
-                    item.metadata.accession,
-                ),
+                key=lambda item: _metadata_order_key(item.metadata),
             )
             if any(
-                amendment.metadata.filing_date
-                <= original.metadata.filing_date
+                _metadata_order_key(amendment.metadata)
+                <= _metadata_order_key(original.metadata)
                 for amendment in ordered_amendments
             ):
                 raise FilingSelectionError(
@@ -409,6 +435,10 @@ class EdgarFilingSource:
                     filing_date=filing_date,
                     report_date=report_date,
                     primary_document=str(filing.primary_document),
+                    acceptance_datetime=_as_datetime(
+                        getattr(filing, "acceptance_datetime", None),
+                        "acceptance_datetime",
+                    ),
                 )
             except FilingSelectionError:
                 raise
@@ -438,3 +468,32 @@ def _as_date(value: object, field_name: str) -> date:
             SelectionFailureCode.INVALID_METADATA,
             f"invalid {field_name}: {value!r}",
         ) from error
+
+
+def _as_datetime(value: object, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError) as error:
+            raise FilingSelectionError(
+                SelectionFailureCode.INVALID_METADATA,
+                f"invalid {field_name}: {value!r}",
+            ) from error
+    if parsed.utcoffset() is None:
+        raise FilingSelectionError(
+            SelectionFailureCode.INVALID_METADATA,
+            f"{field_name} must include a timezone",
+        )
+    return parsed.astimezone(UTC)
+
+
+def _metadata_order_key(metadata: FilingMetadata) -> tuple[date, datetime, str]:
+    return (
+        metadata.filing_date,
+        metadata.acceptance_datetime or datetime.min.replace(tzinfo=UTC),
+        metadata.accession,
+    )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -104,6 +104,7 @@ def source_filing(
     cik: str = "0000000001",
     primary_document: str = "report.htm",
     base_form: str | None = None,
+    acceptance_datetime: datetime | None = None,
 ) -> SourceFiling:
     resolved_base_form = base_form or form.removesuffix("/A")
     return SourceFiling(
@@ -118,6 +119,7 @@ def source_filing(
             filing_date=filing_date,
             report_date=report_date,
             primary_document=primary_document,
+            acceptance_datetime=acceptance_datetime,
         ),
         company=object(),
         filing=object(),
@@ -260,6 +262,58 @@ def test_multiple_amendments_are_ordered_and_identical_duplicates_deduplicate() 
     ]
 
 
+def test_same_day_amendment_uses_sec_acceptance_time() -> None:
+    filing_day = date(2026, 2, 4)
+    original = source_filing(
+        "0000000001-26-000018",
+        "10-K",
+        filing_day,
+        date(2025, 12, 31),
+        acceptance_datetime=datetime(2026, 2, 3, 23, 14, 52, tzinfo=UTC),
+    )
+    amendment = source_filing(
+        "0000000001-26-000021",
+        "10-K/A",
+        filing_day,
+        date(2025, 12, 31),
+        acceptance_datetime=datetime(2026, 2, 4, 20, 6, 57, tzinfo=UTC),
+    )
+
+    selected = FilingSelector(FakeSource([amendment, original])).select(
+        SelectionRequest("AAA"),
+        today=TODAY,
+    )
+
+    assert [item.metadata.accession for item in selected[0].members] == [
+        original.metadata.accession,
+        amendment.metadata.accession,
+    ]
+
+
+def test_same_day_amendment_without_acceptance_time_fails_closed() -> None:
+    filing_day = date(2026, 2, 4)
+    original = source_filing(
+        "0000000001-26-000018",
+        "10-K",
+        filing_day,
+        date(2025, 12, 31),
+    )
+    amendment = source_filing(
+        "0000000001-26-000021",
+        "10-K/A",
+        filing_day,
+        date(2025, 12, 31),
+    )
+
+    with pytest.raises(FilingSelectionError, match="acceptance") as caught:
+        FilingSelector(FakeSource([original, amendment])).select(
+            SelectionRequest("AAA"),
+            today=TODAY,
+        )
+
+    assert caught.value.code is SelectionFailureCode.INVALID_METADATA
+
+
 @pytest.mark.parametrize(
     ("filings", "message"),
     [
@@ -387,12 +441,14 @@ class FakeEdgarFiling:
         filing_date: str,
         period_of_report: str,
         primary_document: str,
+        acceptance_datetime: datetime | None = None,
     ) -> None:
         self.accession_no = accession_no
         self.form = form
         self.filing_date = filing_date
         self.period_of_report = period_of_report
         self.primary_document = primary_document
+        self.acceptance_datetime = acceptance_datetime
 
 
 class FakeCompany:
@@ -417,6 +473,7 @@ def test_edgar_source_requests_amendments_and_maps_complete_metadata() -> None:
                 filing_date="2026-05-01",
                 period_of_report="2026-03-31",
                 primary_document="q1.htm",
+                acceptance_datetime=datetime(2026, 5, 1, 20, tzinfo=UTC),
             ),
             FakeEdgarFiling(
                 accession_no="0000000001-26-000002",
@@ -456,4 +513,5 @@ def test_edgar_source_requests_amendments_and_maps_complete_metadata() -> None:
         filing_date=date(2026, 5, 1),
         report_date=date(2026, 3, 31),
         primary_document="q1.htm",
+        acceptance_datetime=datetime(2026, 5, 1, 20, tzinfo=UTC),
     )
