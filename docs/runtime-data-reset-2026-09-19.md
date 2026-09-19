@@ -134,3 +134,39 @@ The final read-only audit reconfirmed:
 
 The production smoke test uses isolated temporary paths, so its evidence does
 not repopulate any project runtime store.
+
+## Isolated latest-ingest smoke
+
+The production command ingested `NVDA --latest` under an isolated
+`/tmp/thesis-tracker-stage1-smoke.*` root using live SEC metadata and the
+configured embedding service. SEC selected this family:
+
+| CIK | Accession | Form | Filing date | Report date | Primary document |
+|---|---|---|---|---|---|
+| `0001045810` | `0001045810-26-000075` | `10-Q` | `2026-08-26` | `2026-07-26` | `nvda-20260726.htm` |
+
+The family contained one original and no amendment. The downloaded raw file
+was 223,099 bytes / 208,389 characters. Its normalized canonical full text was
+155,519 characters and produced 93 verified chunks.
+
+For the query `Blackwell production revenue demand`, all three production
+Stage 2 routes returned the new accession:
+
+- BM25 top chunk: `0001045810-26-000075::part_i_item_2::chunk_001`;
+- vector top chunk: `0001045810-26-000075::part_i_item_2::chunk_007`;
+- hybrid top chunk: `0001045810-26-000075::part_i_item_2::chunk_001`.
+
+A 180-character evidence slice from the hybrid result passed the existing
+exact-after-normalize source check at offset 0.
+
+Before and after the repeat ingest, counts were identical: 1 document, 93
+chunks, 1 raw file, 1 Chroma collection, and 93 embeddings. The second vector
+refresh reported 93 total, 0 embedded, 93 unchanged, and 0 stale removals.
+
+The fixed temporary path was resolved and prefix-validated before cleanup.
+Because direct recursive removal was rejected and the `/tmp` filesystem does
+not support desktop trash, `find -depth -delete` removed only that validated
+smoke root; the path is absent and the data is no longer locally recoverable.
+The final project audit still reports 0 documents, 0 chunks, 0 raw files, 0
+vector files, 0 EDGAR cache files, 0 backup databases, and 5 of 5 preserved
+fixture hashes matching.
