@@ -41,6 +41,7 @@ class FamilyIngestResult:
     chunk_count: int
     status: str
     members: tuple[FilingMetadata, ...]
+    failures: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +170,11 @@ class IngestCoordinator:
                     ),
                     status="success" if succeeded else "failed",
                     members=metadata,
+                    failures=tuple(
+                        f"{accession}: {failure}"
+                        for accession, accession_failures in failures.items()
+                        for failure in accession_failures
+                    ),
                 )
             )
 

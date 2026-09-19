@@ -87,6 +87,8 @@ def run(
                     f"amends={member.amends_accession or '-'} "
                     f"primaryDocument={member.primary_document}"
                 )
+            for failure in getattr(family, "failures", ()):
+                print(f"  failure={failure}")
             if family.status != "success":
                 exit_code = 1
         if result.index_stats is not None:

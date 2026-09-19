@@ -250,6 +250,10 @@ def test_failed_amendment_invalidates_family_and_skips_index(tmp_path: Path) -> 
     assert statuses == [("failed",), ("failed",)]
     assert counts(ingest.paths.db_path) == (2, 0)
     assert result.families[0].status == "failed"
+    assert any(
+        failed_accession in failure and "build RuntimeError" in failure
+        for failure in result.families[0].failures
+    )
     assert result.stage2_ready is False
     assert "indexed" not in events
 
