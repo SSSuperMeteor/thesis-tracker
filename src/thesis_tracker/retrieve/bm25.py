@@ -43,6 +43,7 @@ class _Candidate:
     chunk_id: str
     ticker: str
     form_type: str
+    base_form: str
     accession: str
     section: str | None
     title: str
@@ -148,7 +149,7 @@ class BM25Retriever:
             parameters.append(ticker.upper())
 
         if form_type:
-            clauses.append("UPPER(d.form_type) = ?")
+            clauses.append("UPPER(d.base_form) = ?")
             parameters.append(form_type.upper())
 
         where = " AND ".join(clauses)
@@ -167,6 +168,7 @@ class BM25Retriever:
                     c.chunk_id,
                     d.ticker,
                     d.form_type,
+                    d.base_form,
                     d.accession,
                     c.section_key,
                     c.title,
@@ -188,14 +190,15 @@ class BM25Retriever:
                 chunk_id=str(row[0]),
                 ticker=str(row[1]),
                 form_type=str(row[2]),
-                accession=str(row[3]),
+                base_form=str(row[3]),
+                accession=str(row[4]),
                 section=(
-                    str(row[4])
-                    if row[4] is not None
+                    str(row[5])
+                    if row[5] is not None
                     else None
                 ),
-                title=str(row[5]),
-                text=str(row[6]),
+                title=str(row[6]),
+                text=str(row[7]),
             )
             for row in rows
         ]

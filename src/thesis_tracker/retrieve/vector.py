@@ -59,6 +59,8 @@ class _ChunkRecord:
     chunk_id: str
     ticker: str
     form_type: str
+    base_form: str
+    is_amendment: bool
     accession: str
     section: str | None
     title: str
@@ -72,6 +74,8 @@ class _ChunkRecord:
         return {
             "ticker": self.ticker,
             "form_type": self.form_type,
+            "base_form": self.base_form,
+            "is_amendment": int(self.is_amendment),
             "accession": self.accession,
             "section": self.section or "",
             "title": self.title,
@@ -358,7 +362,7 @@ class VectorRetriever:
 
         if form_type:
             clauses.append(
-                "UPPER(d.form_type) = ?"
+                "UPPER(d.base_form) = ?"
             )
             parameters.append(
                 form_type.upper()
@@ -378,6 +382,8 @@ class VectorRetriever:
                     c.chunk_id,
                     d.ticker,
                     d.form_type,
+                    d.base_form,
+                    d.is_amendment,
                     d.accession,
                     c.section_key,
                     c.title,
@@ -400,19 +406,21 @@ class VectorRetriever:
                 chunk_id=str(row[0]),
                 ticker=str(row[1]),
                 form_type=str(row[2]),
-                accession=str(row[3]),
+                base_form=str(row[3]),
+                is_amendment=bool(row[4]),
+                accession=str(row[5]),
                 section=(
-                    str(row[4])
-                    if row[4] is not None
+                    str(row[6])
+                    if row[6] is not None
                     else None
                 ),
                 title=(
-                    str(row[5])
-                    if row[5] is not None
+                    str(row[7])
+                    if row[7] is not None
                     else ""
                 ),
-                text=str(row[6]),
-                text_hash=str(row[7]),
+                text=str(row[8]),
+                text_hash=str(row[9]),
             )
             for row in rows
         ]
@@ -507,7 +515,7 @@ class VectorRetriever:
             )
         if form_type:
             filters.append(
-                {"form_type": form_type.upper()}
+                {"base_form": form_type.upper()}
             )
         if not filters:
             return None

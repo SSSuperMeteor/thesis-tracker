@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_ground_truth_covers_every_current_ticker_with_ten_questions() -> None:
     catalog = load_valid_chunk_catalog(ROOT / "data/corpus.db")
+    if not catalog:
+        pytest.skip("historical Stage 2 benchmark requires a populated runtime corpus")
     logical_catalog = dict(catalog)
     for chunk_id, metadata in catalog.items():
         logical_id = re.sub(r"::chunk_\d{3}$", "", chunk_id)

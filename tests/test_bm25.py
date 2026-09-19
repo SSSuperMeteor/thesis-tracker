@@ -19,6 +19,7 @@ def corpus_db(tmp_path: Path) -> Path:
                 accession TEXT PRIMARY KEY,
                 ticker TEXT,
                 form_type TEXT,
+                base_form TEXT,
                 filing_date TEXT,
                 ingestion_status TEXT
             );
@@ -37,14 +38,15 @@ def corpus_db(tmp_path: Path) -> Path:
         connection.executemany(
             """
             INSERT INTO documents
-                (accession, ticker, form_type, filing_date, ingestion_status)
-            VALUES (?, ?, ?, ?, ?)
+                (accession, ticker, form_type, base_form, filing_date,
+                 ingestion_status)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
-                ("amd-q", "AMD", "10-Q", "2026-08-05", "success"),
-                ("amd-k", "AMD", "10-K", "2026-02-04", "success"),
-                ("nvda-q", "NVDA", "10-Q", "2026-08-26", "success"),
-                ("stale-q", "AMD", "10-Q", "2026-09-01", "failed"),
+                ("amd-q", "AMD", "10-Q", "10-Q", "2026-08-05", "success"),
+                ("amd-k", "AMD", "10-K", "10-K", "2026-02-04", "success"),
+                ("nvda-q", "NVDA", "10-Q", "10-Q", "2026-08-26", "success"),
+                ("stale-q", "AMD", "10-Q", "10-Q", "2026-09-01", "failed"),
             ],
         )
         connection.executemany(
@@ -151,6 +153,35 @@ def test_form_type_filter(corpus_db: Path) -> None:
         "amd-k::item-1"
     ]
     assert results[0].form_type == "10-K"
+
+
+def test_base_form_filter_returns_original_and_amendment(corpus_db: Path) -> None:
+    with sqlite3.connect(corpus_db) as connection:
+        connection.execute(
+            """
+            INSERT INTO documents
+                (accession, ticker, form_type, base_form, filing_date,
+                 ingestion_status)
+            VALUES ('amd-q-a', 'AMD', '10-Q/A', '10-Q', '2026-08-10', 'success')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO chunks
+                (chunk_id, accession, section_key, title, text, span_verified, ord)
+            VALUES ('amd-q-a::item-2', 'amd-q-a', 'part_i_item_2',
+                    'Amended discussion', 'Accelerator disclosure was amended.', 1, 1)
+            """
+        )
+
+    results = BM25Retriever(corpus_db).search(
+        "accelerator",
+        top_k=10,
+        form_type="10-Q",
+    )
+
+    assert {result.accession for result in results} == {"amd-q", "amd-q-a"}
+    assert {result.form_type for result in results} == {"10-Q", "10-Q/A"}
 
 
 def test_empty_query_and_no_matches(corpus_db: Path) -> None:

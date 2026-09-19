@@ -147,6 +147,8 @@ def vector_db(tmp_path: Path) -> Path:
                 accession TEXT PRIMARY KEY,
                 ticker TEXT,
                 form_type TEXT,
+                base_form TEXT,
+                is_amendment INTEGER,
                 filing_date TEXT,
                 ingestion_status TEXT
             );
@@ -166,14 +168,15 @@ def vector_db(tmp_path: Path) -> Path:
         connection.executemany(
             """
             INSERT INTO documents
-                (accession, ticker, form_type, filing_date, ingestion_status)
-            VALUES (?, ?, ?, ?, ?)
+                (accession, ticker, form_type, base_form, is_amendment,
+                 filing_date, ingestion_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             [
-                ("amd-q", "AMD", "10-Q", "2026-08-05", "success"),
-                ("amd-k", "AMD", "10-K", "2026-02-04", "success"),
-                ("nvda-q", "NVDA", "10-Q", "2026-08-26", "success"),
-                ("stale-q", "NVDA", "10-Q", "2026-09-01", "failed"),
+                ("amd-q", "AMD", "10-Q", "10-Q", 0, "2026-08-05", "success"),
+                ("amd-k", "AMD", "10-K", "10-K", 0, "2026-02-04", "success"),
+                ("nvda-q", "NVDA", "10-Q", "10-Q", 0, "2026-08-26", "success"),
+                ("stale-q", "NVDA", "10-Q", "10-Q", 0, "2026-09-01", "failed"),
             ],
         )
         connection.executemany(
@@ -330,6 +333,48 @@ def test_query_filters(
         result.chunk_id
         for result in form_results
     ] == ["amd-k::item-1"]
+
+
+def test_base_form_filter_and_metadata_include_amendment(
+    vector_retriever: tuple[VectorRetriever, FakeEmbeddingProvider],
+    vector_db: Path,
+) -> None:
+    retriever, _ = vector_retriever
+    text = "Accelerator disclosure was amended."
+    with sqlite3.connect(vector_db) as connection:
+        connection.execute(
+            """
+            INSERT INTO documents
+                (accession, ticker, form_type, base_form, is_amendment,
+                 filing_date, ingestion_status)
+            VALUES ('amd-q-a', 'AMD', '10-Q/A', '10-Q', 1,
+                    '2026-08-10', 'success')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO chunks
+                (chunk_id, accession, section_key, title, text, text_hash,
+                 span_verified, ord)
+            VALUES ('amd-q-a::item-2', 'amd-q-a', 'part_i_item_2',
+                    'Amended discussion', ?, ?, 1, 1)
+            """,
+            (text, _hash(text)),
+        )
+
+    first = retriever.index()
+    results = retriever.search("accelerator", top_k=10, form_type="10-Q")
+    stored = retriever._collection.get(
+        ids=["amd-q-a::item-2"],
+        include=["metadatas"],
+    )["metadatas"][0]
+    second = retriever.index()
+
+    assert first.embedded_chunks == 5
+    assert {result.form_type for result in results} == {"10-Q", "10-Q/A"}
+    assert stored["base_form"] == "10-Q"
+    assert stored["is_amendment"] == 1
+    assert second.embedded_chunks == 0
 
 
 def test_empty_query_and_no_matching_filter_are_reasonable(

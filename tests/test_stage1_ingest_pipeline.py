@@ -15,7 +15,8 @@ from thesis_tracker.ingest.filing_selection import (
 )
 from thesis_tracker.ingest.pipeline import IngestCoordinator, IngestPaths
 from thesis_tracker.ingest.sec_adapter import CanonicalDoc, Chunk, sha256
-from thesis_tracker.retrieve.vector import IndexStats
+from thesis_tracker.retrieve.bm25 import BM25Retriever
+from thesis_tracker.retrieve.vector import IndexStats, VectorRetriever
 
 
 def source(
@@ -116,6 +117,23 @@ class FakeIndexer:
         changed = ids - self.seen
         self.seen = ids
         return IndexStats(len(ids), len(changed), len(ids - changed), 1, 0)
+
+
+class LocalEmbeddingProvider:
+    model_name = "qwen3-vl-embedding"
+    dimension = 1024
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._vector(text)
+
+    @staticmethod
+    def _vector(text: str) -> list[float]:
+        vector = [0.0] * 1024
+        vector[0] = float(text.casefold().count("complete")) or 1.0
+        return vector
 
 
 def coordinator(
@@ -256,3 +274,42 @@ def test_sanity_failure_invalidates_a_previously_successful_family(
 
     assert counts(ingest.paths.db_path) == (2, 0)
     assert result.stage2_ready is False
+
+
+def test_ingested_amendment_family_is_searchable_through_stage2(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    selected = family(1, amendment=True)
+    paths = IngestPaths(
+        tmp_path / "raw",
+        tmp_path / "corpus.db",
+        tmp_path / "vectors",
+    )
+    provider = LocalEmbeddingProvider()
+    retriever = VectorRetriever(
+        provider,
+        db_path=paths.db_path,
+        vector_path=paths.vector_path,
+    )
+    ingest = IngestCoordinator(
+        selector=FakeSelector((selected,), events),
+        paths=paths,
+        document_builder=lambda item, raw_dir: document(item.metadata),
+        sanity_checker=lambda doc: [],
+        indexer_factory=lambda _: retriever,
+    )
+
+    first = ingest.ingest(SelectionRequest("AAA"), today=date(2026, 9, 19))
+    second = ingest.ingest(SelectionRequest("AAA"), today=date(2026, 9, 19))
+    bm25 = BM25Retriever(paths.db_path).search(
+        "complete",
+        top_k=10,
+        form_type="10-Q",
+    )
+    vectors = retriever.search("complete", top_k=10, form_type="10-Q")
+
+    assert {result.form_type for result in bm25} == {"10-Q", "10-Q/A"}
+    assert {result.form_type for result in vectors} == {"10-Q", "10-Q/A"}
+    assert first.index_stats.embedded_chunks == 2
+    assert second.index_stats.embedded_chunks == 0

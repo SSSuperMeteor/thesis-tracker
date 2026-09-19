@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from thesis_tracker.evaluation.retrieval_stage2 import audit_questions
 from thesis_tracker.evaluation.retrieval_stage2_chunkv2 import (
     _crowding_analysis,
@@ -145,6 +147,8 @@ def test_rank_delta_reports_direction_and_excluded_misses() -> None:
 
 def test_v2_manifest_resolves_against_logical_parent_catalog() -> None:
     _, parents = load_chunkv2_catalog(ROOT / "data/corpus.db")
+    if not parents:
+        pytest.skip("historical Stage 2 benchmark requires a populated runtime corpus")
 
     valid, invalid = audit_questions(QUESTIONS, parents)
 
