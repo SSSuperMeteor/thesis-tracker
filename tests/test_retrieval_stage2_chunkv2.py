@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import pytest
-
 from thesis_tracker.evaluation.retrieval_stage2 import audit_questions
 from thesis_tracker.evaluation.retrieval_stage2_chunkv2 import (
     _crowding_analysis,
@@ -145,10 +143,10 @@ def test_rank_delta_reports_direction_and_excluded_misses() -> None:
     assert _rank_delta(4, None) is None
 
 
-def test_v2_manifest_resolves_against_logical_parent_catalog() -> None:
-    _, parents = load_chunkv2_catalog(ROOT / "data/corpus.db")
-    if not parents:
-        pytest.skip("historical Stage 2 benchmark requires a populated runtime corpus")
+def test_v2_manifest_resolves_against_logical_parent_catalog(
+    stage2_benchmark_corpus: Path,
+) -> None:
+    _, parents = load_chunkv2_catalog(stage2_benchmark_corpus)
 
     valid, invalid = audit_questions(QUESTIONS, parents)
 
@@ -160,8 +158,10 @@ def test_v2_manifest_resolves_against_logical_parent_catalog() -> None:
         assert question["expected_chunk_id"] in parents
 
 
-def test_expected_parents_have_consistent_metadata() -> None:
-    subchunks, parents = load_chunkv2_catalog(ROOT / "data/corpus.db")
+def test_expected_parents_have_consistent_metadata(
+    stage2_benchmark_corpus: Path,
+) -> None:
+    subchunks, parents = load_chunkv2_catalog(stage2_benchmark_corpus)
 
     assert len(subchunks) == sum(item["subchunk_count"] for item in parents.values())
     for parent_id, parent in parents.items():
