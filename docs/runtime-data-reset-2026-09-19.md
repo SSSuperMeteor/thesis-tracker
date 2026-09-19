@@ -96,11 +96,9 @@ SHA-256 hashes are recorded to detect accidental changes:
 
 - Tracked raw filings, SQLite databases, and Stage 2 reports can be recovered
   from Git history if historical comparison is ever required.
-- Untracked raw filings and Stage 3 outputs are removed locally; their source
-  SEC filings or evaluation runs can reproduce them.
-- Ignored EDGAR and Chroma caches are not recoverable as local cache state.
-  They can be deterministically repopulated from SEC metadata, filing bodies,
-  canonical chunks, and the configured embedding model.
+- Untracked/ignored runtime files were moved to the desktop trash rather than
+  directly unlinked. They remain recoverable until that trash is emptied, and
+  can also be regenerated from SEC data and the configured embedding model.
 
 ## After reset
 
@@ -116,6 +114,23 @@ The destructive reset completed with this checkpoint:
 | backup databases | 0 |
 | approved generated result/report files remaining | 0 |
 
-All five preserved fixture hashes still match the pre-reset values. The empty
-SQLite database retains the valid Stage 1 schema. Final-schema zero-state
-counts and isolated smoke-test evidence are appended after implementation.
+All five preserved fixture hashes still match the pre-reset values.
+
+## Final-schema checkpoint
+
+After the Stage 1 implementation, `data/corpus.db` was initialized once with
+the final schema. It is 32,768 bytes and still contains 0 documents and 0
+chunks. The `documents` table includes all four filing-family columns:
+`primary_document`, `base_form`, `is_amendment`, and `amends_accession`.
+
+The final read-only audit reconfirmed:
+
+- raw filing files: 0 files / 0 bytes;
+- Chroma/vector files: 0 files / 0 bytes;
+- EDGAR cache files: 0 files / 0 bytes;
+- backup databases: 0;
+- approved generated Stage 2/3 outputs remaining: 0;
+- preserved fixture hashes matching: 5 of 5.
+
+The production smoke test uses isolated temporary paths, so its evidence does
+not repopulate any project runtime store.
