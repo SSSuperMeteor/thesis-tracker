@@ -16,11 +16,14 @@ configuration, and hand-authored evaluation inputs.
 
 ### In scope
 
-- Select SEC `10-Q` and `10-K` filings from official metadata before download.
+- Select SEC `10-Q` and `10-K` filing families, including subsequent `/A`
+  amendments, from official metadata before download.
 - Make latest selection the default.
 - Support inclusive `--since YYYY-MM-DD` and rolling `--years N` history
   requests.
 - Persist accession, form, filing date, report date, and primary document.
+- Preserve the relationship between an original filing and every later
+  amendment for the same reporting period.
 - Preserve complete filing parsing, canonical text, verified chunks, lineage,
   and Stage 2 retrieval/citation metadata.
 - Make repeated ingestion of an accession idempotent in SQLite and Chroma.
@@ -78,10 +81,11 @@ write storage, or call an LLM.
 It exposes:
 
 - an immutable selection request containing ticker and exactly one mode;
-- immutable filing metadata containing ticker, CIK, accession, form,
-  `filing_date`, `report_date`, and `primary_document`;
-- a selected filing containing validated metadata and the corresponding
-  edgartools filing handle;
+- immutable filing metadata containing ticker, CIK, accession, exact SEC form,
+  base form, amendment status, `amends_accession`, `filing_date`, `report_date`,
+  and `primary_document`;
+- a selected filing family containing one original filing, zero or more ordered
+  amendments, validated metadata, and the corresponding edgartools handles;
 - a provider boundary so tests can supply complete SEC-shaped metadata without
   network calls;
 - a production edgartools provider backed by SEC submissions metadata.
@@ -91,18 +95,30 @@ company unavailable, SEC metadata unavailable, invalid metadata, and no
 matching periodic filing. The selector never falls back to a local filing,
 Company Facts, IR pages, or an AI model.
 
-### 2. Supported forms and amendment exclusion
+### 2. Supported forms and amendment handling
 
-The supported forms are exactly `10-Q` and `10-K`.
+Supported SEC form values are exactly `10-Q`, `10-K`, `10-Q/A`, and `10-K/A`.
+The base periodic forms remain `10-Q` and `10-K`.
 
-Amendments are excluded twice:
+edgartools is requested with `amendments=True`. Python then accepts only the
+four exact form values above; unrelated form types remain excluded.
 
-1. edgartools is requested with `amendments=False`;
-2. Python accepts only exact normalized form values in `{10-Q, 10-K}`.
+The selector groups metadata into filing families using the SEC CIK, normalized
+base form, and exact report date. A valid family has exactly one original
+filing and zero or more later amendments. Each amendment must have a filing
+date later than the original and receives an `amends_accession` link to that
+original. Amendments remain independent filings with independent accession
+identities; they never overwrite the original or one another.
 
-Thus `10-Q/A`, `10-K/A`, and any other form cannot become latest or enter a
-history result even if an upstream provider returns it unexpectedly. Tests pin
-both the provider argument and the Python-side rejection.
+An orphan amendment, multiple originals for one family key, an amendment dated
+before its original, or conflicting metadata for an accession makes that
+family invalid. Selection fails closed instead of silently falling back to the
+unamended original.
+
+An amendment often contains only the changed material rather than a complete
+restatement. Therefore an amended family ingests both the original complete
+filing and every amendment in filing-date order. The amendment is not treated
+as a replacement full-text source by itself.
 
 ### 3. Latest semantics
 
@@ -112,15 +128,21 @@ explicit spelling of the same mode.
 The selector:
 
 1. resolves ticker to company and CIK through edgartools;
-2. obtains official filing metadata for exact supported periodic forms;
+2. obtains official filing metadata for supported originals and amendments;
 3. validates required metadata before any download;
-4. sorts by `(filing_date, accession)` descending;
-5. returns exactly the first filing.
+4. builds and validates filing families;
+5. assigns each family an effective key equal to its latest member's
+   `(filing_date, accession)`;
+6. sorts families by that effective key descending;
+7. returns exactly the first family, including its original and amendments.
 
-The filing date is the primary recency key because it records when the SEC
-accepted the filing. Accession is the stable deterministic tie-breaker and the
-unique filing identity. Report date describes the covered period but does not
-decide which filing was filed most recently.
+The latest family member's filing date is the primary recency key because it
+records when the SEC accepted the current version of that filing family.
+Accession is the stable deterministic tie-breaker and each member's unique
+identity. Report date groups an original with its amendments but does not by
+itself decide recency. Consequently, a newly filed amendment can make its
+filing family latest; the selector cannot silently return the older original
+as though no amendment existed.
 
 If required metadata cannot be proven, selection fails closed rather than
 choosing a plausible candidate.
@@ -134,12 +156,18 @@ to `DATE`.
 by moving the injected current date back `N` calendar years. February 29 maps
 to February 28 when the target year is not a leap year.
 
+History filtering is applied to the filing family's effective filing date. If
+an amendment falls inside the requested range while its original is older than
+the lower bound, the entire family is included so the amendment is never
+detached from the complete original filing.
+
 History results:
 
-- contain only exact `10-Q` and `10-K` forms;
-- exclude amendments;
+- contain only supported original and amendment forms;
+- include the original plus all amendments for each selected family;
 - use filing date, not report date, for the range boundary;
-- are sorted by `(filing_date, accession)` descending;
+- sort families by effective `(filing_date, accession)` descending and members
+  within a family by `(filing_date, accession)` ascending;
 - are de-duplicated by accession;
 - fail if conflicting metadata is returned for one accession.
 
@@ -151,15 +179,17 @@ three selects latest.
 An ingest coordinator performs one ordered flow:
 
 1. validate the request;
-2. select all filing metadata;
-3. for each selected accession, build the existing full `CanonicalDoc`;
-4. run the existing strict `assert_sane` checks;
-5. save the document and chunks transactionally;
+2. select and validate all filing families and member metadata;
+3. for each selected family, build the original full `CanonicalDoc` followed
+   by each amendment as an independent accession before saving any member;
+4. run the existing strict `assert_sane` checks on every member;
+5. save all family documents and chunks in one SQLite transaction;
 6. after the batch succeeds, refresh the vector index from successful,
    span-verified SQLite chunks.
 
-Selection always completes before the first filing download or parse. A
-selection error therefore cannot leave a partially selected history range.
+Selection and family validation always complete before the first filing
+download or parse. A selection error therefore cannot leave a partially
+selected history range.
 
 The existing canonical parser and chunker remain authoritative for filing
 text. Their strict exact-span checks and optional boundary-repair validation
@@ -173,16 +203,28 @@ repopulating the cleaned project runtime stores.
 ### 6. Persistence and idempotency
 
 `documents.accession` remains the SQLite primary key. The documents schema
-adds a nullable `primary_document` field; all existing fields retain their
-meaning. `period_end` continues to store SEC report date for compatibility.
+adds `primary_document`, `base_form`, `is_amendment`, and
+`amends_accession` fields; all existing fields retain their meaning.
+`period_end` continues to store SEC report date for compatibility, while
+`form_type` stores the exact SEC form including `/A`.
 
-Saving one accession uses the existing UPSERT plus delete-and-reinsert chunk
-transaction. Different accessions therefore coexist, while rerunning the same
-accession cannot add duplicate document or chunk rows.
+Saving a valid family applies the existing per-accession UPSERT plus
+delete-and-reinsert chunk behavior inside one family transaction. Different
+accessions therefore coexist, while rerunning the same family cannot add
+duplicate document or chunk rows.
 
 Chunk IDs, `parent_id`, `prev_id`, `next_id`, order, exact text spans,
 `text_hash`, and extraction metadata remain unchanged. No historical filing
 can overwrite another because every derived row is scoped by accession.
+
+If all members pass canonical sanity checks, the original and amendments are
+stored with `ingestion_status='success'` and are queryable together so Stage 2
+has the complete base text plus all revised material. If any member fails, the
+family transaction stores every member with a non-success status and no family
+chunks. Existing successful chunks for every member of that family are
+removed. Stage 2 already filters to successful documents, so the unamended
+original cannot remain silently exposed as the effective current filing. The
+command reports the affected accession and does not claim Stage 2 readiness.
 
 Chroma continues to use chunk ID as its item identity and `text_hash` plus
 embedding model metadata to skip unchanged embeddings. A full reconciliation
@@ -206,9 +248,10 @@ The complete ingest path includes vector refresh by default. The explicit
 without an embedding credential; its use is visible in output and the command
 does not report that run as a complete Stage 2-ready ingest.
 
-The program prints selected accession, form, filing date, report date, primary
-document, document/chunk counts, and vector index statistics without printing
-secret values.
+The program prints the selected family, every member accession, exact form,
+filing date, report date, amendment relationship, primary document,
+document/chunk counts, and vector index statistics without printing secret
+values.
 
 The prior direct module invocation remains usable where practical, but its
 default changes from latest `10-Q` to latest supported periodic filing across
@@ -220,16 +263,19 @@ The Stage 2 contract remains:
 
 - BM25 joins `chunks.accession` to `documents.accession` and filters successful,
   span-verified chunks;
-- Chroma metadata includes ticker, form, accession, section, title, text hash,
-  embedding model, and dimension;
+- Chroma metadata includes ticker, exact form, base form, amendment status,
+  accession, section, title, text hash, embedding model, and dimension;
 - hybrid retrieval performs existing RRF and parent collapse;
 - citations point to the exact child chunk containing normalized exact-match
   evidence;
 - Layer A grounding, Layer B support, unsupported leakage rules, and fallback
   states are unchanged.
 
-Adding `primary_document` is backward-compatible because Stage 2 uses explicit
-column lists. No retrieval algorithm or citation validator is modified.
+Adding filing-family columns is backward-compatible because Stage 2 uses
+explicit column lists. Form filters use base form so a `10-Q` query can return
+both the original and its `10-Q/A` amendment; result metadata still reports the
+exact SEC form. This is a metadata-filter adjustment, not a ranking or citation
+algorithm change. No citation validator is modified.
 
 The two pre-existing corpus-bound Stage 2 benchmark tests currently fail
 because runtime corpus tickers and the fixed question manifest disagree. Once
@@ -244,8 +290,10 @@ vector retrieval, RRF, parent/child metadata, Layer A, and Layer B.
 - Invalid dates and non-positive year counts fail before SEC access.
 - Missing or malformed accession, form, filing date, report date, or required
   company identity fails selection.
-- Unsupported forms and amendments are rejected, never silently normalized to
-  a supported form.
+- Unsupported forms are rejected, never silently normalized to a supported
+  form.
+- Orphan, ambiguous, out-of-order, or conflicting amendments fail family
+  validation; the original is not used as an unqualified fallback.
 - No matching filing is a structured failure, not a fallback to local data.
 - Parser sanity failures retain their current failed-document behavior and do
   not emit chunks or vectors.
@@ -259,21 +307,24 @@ Tests use complete fake SEC metadata at the provider boundary and real
 temporary SQLite/Chroma stores with the existing fake embedding provider.
 They cover:
 
-1. default and explicit latest select the current `10-Q`/`10-K` accession;
+1. default and explicit latest select the family whose effective original or
+   amendment accession is newest;
 2. accession and saved metadata match the SEC-shaped response;
-3. amendments are excluded at both provider and selector boundaries;
-4. repeating one accession leaves document, chunk, and vector counts stable;
-5. a newly filed accession becomes latest and is added without removing the
+3. supported amendments are requested, linked to the correct original, saved
+   under independent accessions, and returned by base-form Stage 2 filters;
+4. orphan, ambiguous, out-of-order, and conflicting amendments fail closed;
+5. repeating one accession leaves document, chunk, and vector counts stable;
+6. a newly filed accession becomes latest and is added without removing the
    earlier accession;
-6. `--years N` uses an inclusive calendar-year filing-date boundary;
-7. `--since DATE` is inclusive;
-8. history ordering and same-accession de-duplication are deterministic;
-9. multiple filings coexist;
-10. CanonicalDoc/chunk/parent metadata remains consumable by BM25, vector,
+7. `--years N` uses an inclusive calendar-year filing-date boundary;
+8. `--since DATE` is inclusive and includes an amendment's complete family;
+9. history ordering and same-accession de-duplication are deterministic;
+10. multiple filings and amendments coexist;
+11. CanonicalDoc/chunk/parent metadata remains consumable by BM25, vector,
     hybrid, and citation code;
-11. temporary cleanup inspection reports zero raw files, database rows,
+12. temporary cleanup inspection reports zero raw files, database rows,
     vectors, caches, and generated output artifacts;
-12. the approved hand-authored fixtures remain present.
+13. the approved hand-authored fixtures remain present.
 
 Every behavior change follows red-green-refactor. Tests do not call the live
 SEC service. Live SEC and embedding access are reserved for the final smoke
