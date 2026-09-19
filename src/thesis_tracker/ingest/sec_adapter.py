@@ -22,7 +22,7 @@ import sqlite3
 import sys
 import threading
 import unicodedata
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -33,6 +33,8 @@ from typing import Any, TypeVar
 import edgar
 from edgar import Company, set_identity
 from tqdm import tqdm
+
+from thesis_tracker.ingest.filing_selection import FilingMetadata
 
 try:
     from openai import OpenAI
@@ -314,6 +316,11 @@ class CanonicalDoc:
     schema_version: int
 
     full_text: str
+
+    primary_document: str | None = None
+    base_form: str | None = None
+    is_amendment: bool = False
+    amends_accession: str | None = None
 
     chunks: list[Chunk] = field(
         default_factory=list
@@ -1067,6 +1074,7 @@ def fetch_filing(
             company,
             filing,
             progress=show_progress,
+            ticker=ticker,
         )
         for filing in filings
     ]
@@ -1076,46 +1084,152 @@ def fetch_filing(
 # Canonical build
 # ----------------------------------------------------------------
 
+def _sanitize_filename_component(
+    value: Any,
+    *,
+    field: str = "component",
+) -> str:
+    """Normalize one metadata value into a safe single path component.
+
+    Missing or blank values are rejected instead of stringified, so ``None`` never
+    becomes the literal ``"None"`` filename fragment. Path separators are replaced
+    with ``-`` and path-traversal tokens are rejected, so a metadata value can never
+    add a directory level or escape ``RAW_DIR``. The original metadata is never
+    mutated because only the returned copy is used.
+    """
+    if value is None:
+        raise ValueError(
+            f"raw filing filename {field} is missing (None)"
+        )
+
+    component = str(value)
+
+    if not component.strip():
+        raise ValueError(
+            f"raw filing filename {field} is empty"
+        )
+
+    component = component.strip()
+
+    if any(
+        character in component
+        for character in ("\x00", "\n", "\r", "\t")
+    ):
+        raise ValueError(
+            f"raw filing filename {field} contains a control character: "
+            f"{component!r}"
+        )
+
+    if component in {".", ".."}:
+        raise ValueError(
+            f"raw filing filename {field} is a path traversal token: "
+            f"{component!r}"
+        )
+
+    # 合法但含分隔符的 metadata 用稳定替换，例如 10-Q/A -> 10-Q-A
+    for separator in ("/", "\\"):
+        component = component.replace(
+            separator,
+            "-",
+        )
+
+    component = component.replace(
+        ":",
+        "-",
+    )
+
+    # 任何点号连续段都替换掉，文件名中不残留 ".." 之类的遍历片段
+    if re.search(r"\.\.", component):
+        component = re.sub(
+            r"\.{2,}",
+            "-",
+            component,
+        )
+
+    # 末尾的点和空格在部分文件系统上非法或歧义
+    component = component.rstrip(
+        " .",
+    )
+
+    # 折叠替换后产生的分隔符噪声，例如 "../evil" -> "evil"
+    component = component.strip(
+        "-",
+    )
+
+    if not component:
+        raise ValueError(
+            f"raw filing filename {field} is empty after normalization"
+        )
+
+    return component
+
+
 def _raw_filing_path(
     company,
     filing,
+    *,
+    ticker_fallback: str | None = None,
+    raw_dir: Path = RAW_DIR,
 ) -> Path:
+    # 个别发行人（例如未登记 ticker 的大市值公司）tickers 为空，此时用调用方
+    # 已经解析过的 ticker，而不是写出空文件名片段。
     ticker = (
         str(company.tickers[0]).upper()
-        if company.tickers
-        else ""
-    )
-    form = str(filing.form)
-    period_end = str(
-        filing.period_of_report
-    )
-    accession = str(
-        filing.accession_no
+        if getattr(company, "tickers", None)
+        else str(ticker_fallback or "").upper()
     )
 
-    components = (
-        ticker,
-        form,
-        period_end,
-        accession,
-    )
+    accession = filing.accession_no
 
-    if (
-        not all(components)
-        or any(
-            separator in component
-            for component in components
-            for separator in ("/", "\\")
-        )
-    ):
+    # 先检查原始值是否为空，再 stringify，避免 str(None) == "None"
+    if filing.form is None:
         raise ValueError(
-            "raw filing 文件名包含空值或路径分隔符"
+            "raw filing filename form is missing (None)"
         )
 
-    return RAW_DIR / (
-        f"{ticker}_{form}_{period_end}_"
-        f"{accession}.txt"
+    if filing.period_of_report is None:
+        raise ValueError(
+            "raw filing filename period_end is missing (None)"
+        )
+
+    if accession is None:
+        raise ValueError(
+            "raw filing filename accession is missing (None)"
+        )
+
+    safe = {
+        "ticker": _sanitize_filename_component(
+            ticker,
+            field="ticker",
+        ),
+        "form": _sanitize_filename_component(
+            filing.form,
+            field="form",
+        ),
+        "period_end": _sanitize_filename_component(
+            filing.period_of_report,
+            field="period_end",
+        ),
+        "accession": _sanitize_filename_component(
+            accession,
+            field="accession",
+        ),
+    }
+
+    path = raw_dir / (
+        f"{safe['ticker']}_{safe['form']}_"
+        f"{safe['period_end']}_{safe['accession']}.txt"
     )
+
+    # Defense in depth: the final path must stay directly inside RAW_DIR.
+    raw_root = raw_dir.resolve()
+
+    if path.resolve().parent != raw_root:
+        raise ValueError(
+            f"raw filing path escapes RAW_DIR: {path}"
+        )
+
+    return path
 
 
 def _build(
@@ -1123,6 +1237,9 @@ def _build(
     filing,
     *,
     progress: bool = False,
+    ticker: str | None = None,
+    metadata: FilingMetadata | None = None,
+    raw_dir: Path = RAW_DIR,
 ) -> CanonicalDoc:
 
     _progress_write(
@@ -1134,11 +1251,23 @@ def _build(
 
     warnings: list[str] = []
 
+    # tickers 缺失时回退到调用方传入的 ticker，raw 文件名、canonical metadata
+    # 与 chunk 归属共用同一个值，避免 XOM 这类无 ticker metadata 的发行人写出空 ticker。
+    resolved_ticker = (
+        metadata.ticker
+        if metadata is not None
+        else (
+            str(company.tickers[0]).upper()
+            if getattr(company, "tickers", None)
+            else str(ticker or "").upper()
+        )
+    )
+
     # ============================================================
     # RAW immutable truth
     # ============================================================
 
-    RAW_DIR.mkdir(
+    raw_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
@@ -1146,6 +1275,8 @@ def _build(
     raw_path = _raw_filing_path(
         company,
         filing,
+        ticker_fallback=resolved_ticker,
+        raw_dir=raw_dir,
     )
 
     # 原始 SEC filing 一旦保存就不覆盖
@@ -1177,22 +1308,30 @@ def _build(
             company.cik
         ).zfill(10),
 
-        ticker=(
-            company.tickers[0]
-            if company.tickers
-            else ""
+        ticker=resolved_ticker,
+
+        form_type=(
+            metadata.form
+            if metadata is not None
+            else filing.form
         ),
 
-        form_type=filing.form,
-
-        accession=filing.accession_no,
+        accession=(
+            metadata.accession
+            if metadata is not None
+            else filing.accession_no
+        ),
 
         period_end=str(
-            filing.period_of_report
+            metadata.report_date
+            if metadata is not None
+            else filing.period_of_report
         ),
 
         filing_date=str(
-            filing.filing_date
+            metadata.filing_date
+            if metadata is not None
+            else filing.filing_date
         ),
 
         fetched_at=datetime.now(
@@ -1208,6 +1347,30 @@ def _build(
         schema_version=SCHEMA_VERSION,
 
         full_text=full_text,
+
+        primary_document=(
+            metadata.primary_document
+            if metadata is not None
+            else getattr(filing, "primary_document", None)
+        ),
+
+        base_form=(
+            metadata.base_form
+            if metadata is not None
+            else str(filing.form).removesuffix("/A")
+        ),
+
+        is_amendment=(
+            metadata.is_amendment
+            if metadata is not None
+            else str(filing.form).endswith("/A")
+        ),
+
+        amends_accession=(
+            metadata.amends_accession
+            if metadata is not None
+            else None
+        ),
     )
 
     # ============================================================
@@ -2308,6 +2471,16 @@ CREATE TABLE IF NOT EXISTS documents (
 
     schema_version INTEGER,
 
+    primary_document TEXT,
+
+    base_form TEXT,
+
+    is_amendment INTEGER
+        NOT NULL
+        DEFAULT 0,
+
+    amends_accession TEXT,
+
     ingestion_status TEXT
         NOT NULL
         DEFAULT 'success',
@@ -2442,6 +2615,18 @@ def _ensure_schema(
             """
         )
 
+    document_migrations = {
+        "primary_document": "TEXT",
+        "base_form": "TEXT",
+        "is_amendment": "INTEGER NOT NULL DEFAULT 0",
+        "amends_accession": "TEXT",
+    }
+    for column, definition in document_migrations.items():
+        if column not in document_columns:
+            con.execute(
+                f"ALTER TABLE documents ADD COLUMN {column} {definition}"
+            )
+
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS
@@ -2455,59 +2640,32 @@ def _ensure_schema(
 # Save
 # ----------------------------------------------------------------
 
-def save(
-    doc: CanonicalDoc,
-    db_path: Path = DB_PATH,
-    failures: list[str] | None = None,
+def _write_document(
+    con: sqlite3.Connection,
+    *,
+    doc: CanonicalDoc | None,
+    metadata: FilingMetadata | None,
+    failures: Sequence[str],
 ) -> None:
+    """Upsert one selected accession and replace its derived chunks."""
+    if doc is None and metadata is None:
+        raise ValueError("doc or metadata is required")
 
-    ingestion_status = (
-        "failed"
-        if failures
-        else "success"
+    accession = doc.accession if doc is not None else metadata.accession
+    form_type = doc.form_type if doc is not None else metadata.form
+    base_form = (
+        doc.base_form or form_type.removesuffix("/A")
+        if doc is not None
+        else metadata.base_form
     )
-
-    stored_chunks = (
-        []
-        if failures
-        else doc.chunks
+    is_amendment = (
+        doc.is_amendment if doc is not None else metadata.is_amendment
     )
-
+    stored_chunks = [] if failures or doc is None else doc.chunks
     stored_warnings = [
-        *doc.warnings,
-        *(
-            f"SANITY_FAIL: {failure}"
-            for failure in failures or []
-        ),
+        *(doc.warnings if doc is not None else []),
+        *(f"SANITY_FAIL: {failure}" for failure in failures),
     ]
-
-    db_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    con = sqlite3.connect(
-        db_path
-    )
-
-    con.execute(
-        "PRAGMA foreign_keys = ON"
-    )
-
-    _ensure_schema(
-        con
-    )
-
-    # ============================================================
-    # documents UPSERT
-    #
-    # 不用 INSERT OR REPLACE。
-    #
-    # 因为 SQLite REPLACE 实际是：
-    # DELETE + INSERT
-    #
-    # 打开 foreign_keys 后容易和 chunks FK 冲突。
-    # ============================================================
 
     con.execute(
         """
@@ -2535,6 +2693,14 @@ def save(
 
             schema_version,
 
+            primary_document,
+
+            base_form,
+
+            is_amendment,
+
+            amends_accession,
+
             ingestion_status,
 
             n_chunks,
@@ -2544,7 +2710,7 @@ def save(
         )
 
         VALUES (
-            ?,?,?,?,?,?,?,?,?,?,?,?,?,?
+            ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
         )
 
         ON CONFLICT(accession)
@@ -2580,6 +2746,18 @@ def save(
             schema_version =
                 excluded.schema_version,
 
+            primary_document =
+                excluded.primary_document,
+
+            base_form =
+                excluded.base_form,
+
+            is_amendment =
+                excluded.is_amendment,
+
+            amends_accession =
+                excluded.amends_accession,
+
             ingestion_status =
                 excluded.ingestion_status,
 
@@ -2590,29 +2768,30 @@ def save(
                 excluded.warnings_json
         """,
         (
-            doc.accession,
-
-            doc.cik,
-
-            doc.ticker,
-
-            doc.form_type,
-
-            doc.period_end,
-
-            doc.filing_date,
-
-            doc.fetched_at,
-
-            doc.doc_hash,
-
-            doc.parser_version,
-
-            doc.normalizer_version,
-
-            doc.schema_version,
-
-            ingestion_status,
+            accession,
+            doc.cik if doc is not None else metadata.cik,
+            doc.ticker if doc is not None else metadata.ticker,
+            form_type,
+            doc.period_end if doc is not None else metadata.report_date.isoformat(),
+            doc.filing_date if doc is not None else metadata.filing_date.isoformat(),
+            doc.fetched_at if doc is not None else datetime.now(timezone.utc).isoformat(),
+            doc.doc_hash if doc is not None else None,
+            doc.parser_version if doc is not None else None,
+            doc.normalizer_version if doc is not None else None,
+            doc.schema_version if doc is not None else SCHEMA_VERSION,
+            (
+                doc.primary_document
+                if doc is not None
+                else metadata.primary_document
+            ),
+            base_form,
+            int(is_amendment),
+            (
+                doc.amends_accession
+                if doc is not None
+                else metadata.amends_accession
+            ),
+            "failed" if failures else "success",
 
             len(stored_chunks),
 
@@ -2643,7 +2822,7 @@ def save(
         WHERE accession = ?
         """,
         (
-            doc.accession,
+            accession,
         ),
     )
 
@@ -2692,7 +2871,7 @@ def save(
             (
                 chunk.chunk_id,
 
-                doc.accession,
+                accession,
 
                 chunk.doc_hash,
 
@@ -2729,9 +2908,67 @@ def save(
         ],
     )
 
-    con.commit()
 
-    con.close()
+def save(
+    doc: CanonicalDoc,
+    db_path: Path = DB_PATH,
+    failures: list[str] | None = None,
+) -> None:
+    """Persist one filing, retained for existing Stage 1 callers."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as con:
+        con.execute("PRAGMA foreign_keys = ON")
+        _ensure_schema(con)
+        _write_document(
+            con,
+            doc=doc,
+            metadata=None,
+            failures=failures or (),
+        )
+
+
+def save_family(
+    members: Sequence[FilingMetadata],
+    docs_by_accession: Mapping[str, CanonicalDoc],
+    db_path: Path = DB_PATH,
+    failures_by_accession: Mapping[str, Sequence[str]] | None = None,
+) -> None:
+    """Persist an original filing and all amendments as one fail-closed unit."""
+    if not members:
+        raise ValueError("filing family must contain at least one member")
+
+    accessions = [member.accession for member in members]
+    if len(accessions) != len(set(accessions)):
+        raise ValueError("filing family contains duplicate accessions")
+
+    failures_by_accession = failures_by_accession or {}
+    family_failures: list[str] = []
+    for member in members:
+        doc = docs_by_accession.get(member.accession)
+        if doc is None:
+            family_failures.append(
+                f"{member.accession}: missing canonical document"
+            )
+        elif doc.accession != member.accession:
+            family_failures.append(
+                f"{member.accession}: canonical accession mismatch"
+            )
+        family_failures.extend(
+            f"{member.accession}: {failure}"
+            for failure in failures_by_accession.get(member.accession, ())
+        )
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as con:
+        con.execute("PRAGMA foreign_keys = ON")
+        _ensure_schema(con)
+        for member in members:
+            _write_document(
+                con,
+                doc=docs_by_accession.get(member.accession),
+                metadata=member,
+                failures=family_failures,
+            )
 
 
 # ----------------------------------------------------------------
