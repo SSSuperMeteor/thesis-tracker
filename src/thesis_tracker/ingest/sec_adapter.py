@@ -34,6 +34,7 @@ import edgar
 from edgar import Company, set_identity
 from tqdm import tqdm
 
+from thesis_tracker.config import load_settings
 from thesis_tracker.ingest.filing_selection import FilingMetadata
 
 try:
@@ -69,8 +70,6 @@ SCHEMA_VERSION = 3
 DATA_DIR = Path("./data")
 RAW_DIR = DATA_DIR / "raw"
 DB_PATH = DATA_DIR / "corpus.db"
-SEC_IDENTITY = "thesis-tracker tang20050913@gmail.com"
-
 # 可通过环境变量修改
 LLM_REPAIR_MODEL = os.getenv(
     "SEC_REPAIR_MODEL",
@@ -1056,7 +1055,10 @@ def fetch_filing(
         show_progress,
     )
 
-    set_identity(SEC_IDENTITY)
+    identity = load_settings().edgar_identity
+    if not identity:
+        raise RuntimeError("EDGAR_IDENTITY is required for SEC access")
+    set_identity(identity)
 
     company = Company(
         ticker
@@ -3066,6 +3068,10 @@ def verify_quote(
 # ----------------------------------------------------------------
 
 if __name__ == "__main__":
+
+    from thesis_tracker.ingest.cli import main as ingest_main
+
+    raise SystemExit(ingest_main())
 
     # ============================================================
     # CLI args
