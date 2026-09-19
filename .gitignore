@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.uv-cache/
 
 build/
 dist/
@@ -16,6 +17,12 @@ store/corpus.db-*
 store/vectors/
 store/cache/
 store/artifacts/
+
+# Local runtime data (never commit; created/updated by ingest)
+data/corpus.db
+data/corpus.db-*
+data/raw/
+data/cache/
 
 eval/results/
 *.log
