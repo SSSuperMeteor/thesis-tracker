@@ -320,17 +320,6 @@ def test_same_day_amendment_without_acceptance_time_fails_closed() -> None:
         (
             [
                 source_filing(
-                    "0000000001-26-000002",
-                    "10-Q/A",
-                    date(2026, 5, 2),
-                    date(2026, 3, 31),
-                )
-            ],
-            "orphan",
-        ),
-        (
-            [
-                source_filing(
                     "0000000001-26-000001",
                     "10-Q",
                     date(2026, 5, 1),
@@ -397,6 +386,48 @@ def test_invalid_filing_families_fail_closed(
         )
 
     assert caught.value.code is SelectionFailureCode.INVALID_METADATA
+
+
+def test_orphan_amendment_does_not_abort_valid_latest_selection() -> None:
+    orphan = source_filing(
+        "0000000001-18-000028",
+        "10-K/A",
+        date(2018, 3, 29),
+        date(2017, 7, 1),
+    )
+    latest = source_filing(
+        "0000000001-26-000050",
+        "10-K",
+        date(2026, 8, 17),
+        date(2026, 6, 27),
+    )
+
+    families = FilingSelector(FakeSource([orphan, latest])).select(
+        SelectionRequest("AAA"),
+        today=TODAY,
+    )
+
+    assert [family.effective.metadata.accession for family in families] == [
+        latest.metadata.accession
+    ]
+    assert families[0].amendments == ()
+
+
+def test_only_orphan_amendment_still_fails_closed() -> None:
+    orphan = source_filing(
+        "0000000001-18-000028",
+        "10-K/A",
+        date(2018, 3, 29),
+        date(2017, 7, 1),
+    )
+
+    with pytest.raises(FilingSelectionError) as caught:
+        FilingSelector(FakeSource([orphan])).select(
+            SelectionRequest("AAA"),
+            today=TODAY,
+        )
+
+    assert caught.value.code is SelectionFailureCode.NO_MATCHING_FILINGS
 
 
 def test_conflicting_duplicate_accession_fails_closed() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -12,6 +13,8 @@ from typing import Protocol
 from edgar import Company, set_identity
 
 from thesis_tracker.config import load_settings
+
+LOGGER = logging.getLogger(__name__)
 
 SUPPORTED_BASE_FORMS = frozenset({"10-Q", "10-K"})
 SUPPORTED_FORMS = frozenset({"10-Q", "10-K", "10-Q/A", "10-K/A"})
@@ -302,10 +305,17 @@ class FilingSelector:
                 if member.metadata.is_amendment
             ]
             if not originals:
-                raise FilingSelectionError(
-                    SelectionFailureCode.INVALID_METADATA,
-                    f"orphan amendment family {key}",
+                # An amendment whose original lies outside the loaded metadata
+                # window cannot form a self-contained family: the original body
+                # is the base document, so the amendment is not selectable on
+                # its own.  Skip it instead of aborting every other (valid)
+                # family for this issuer.
+                LOGGER.warning(
+                    "skipping orphan amendment family %s: no original in the "
+                    "loaded filing metadata",
+                    key,
                 )
+                continue
             if len(originals) > 1:
                 raise FilingSelectionError(
                     SelectionFailureCode.INVALID_METADATA,

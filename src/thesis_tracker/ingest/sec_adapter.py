@@ -801,6 +801,128 @@ def _locate_note_heading(
 
 
 # ----------------------------------------------------------------
+# Item label → SEC Part resolution
+# ----------------------------------------------------------------
+
+_PART_ITEM_LABEL_RE = re.compile(
+    r"Part\s+([IVX]+)\s*,\s*(Item\s+[\w.]+)",
+    re.IGNORECASE,
+)
+_BARE_ITEM_LABEL_RE = re.compile(
+    r"Item\s+[\w.]+",
+    re.IGNORECASE,
+)
+_STRUCTURE_PART_RE = re.compile(
+    r"Part\s+([IVX]+)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_item_key(
+    item_label: str,
+) -> str:
+    return (
+        item_label.lower()
+        .replace(" ", "_")
+        .replace(".", "")
+    )
+
+
+def _item_part_lookup(
+    obj: Any,
+) -> dict[str, str]:
+    """
+    Map normalized item labels to their SEC Part using the parser structure.
+
+    edgartools returns some 10-K item labels as bare ``Item 1`` instead of
+    ``Part I, Item 1``.  The parser still exposes the official part structure,
+    so the Part can be recovered from metadata instead of guessed.
+
+    An item that appears under more than one part (normal for 10-Q headers
+    without a part prefix) is treated as ambiguous and omitted, so callers
+    fail closed rather than binding it to the wrong Part.
+    """
+
+    structure = getattr(
+        getattr(obj, "structure", None),
+        "structure",
+        None,
+    )
+
+    if not isinstance(structure, dict):
+        return {}
+
+    lookup: dict[str, str] = {}
+    ambiguous: set[str] = set()
+
+    for part_label, items in structure.items():
+
+        part_match = _STRUCTURE_PART_RE.match(
+            str(part_label).strip()
+        )
+
+        if part_match is None:
+            continue
+
+        part = part_match.group(1).upper()
+
+        if isinstance(items, dict):
+            item_labels = list(items)
+        elif isinstance(items, (list, tuple)):
+            item_labels = list(items)
+        else:
+            continue
+
+        for item_label in item_labels:
+
+            normalized = str(item_label).strip()
+
+            if _BARE_ITEM_LABEL_RE.fullmatch(normalized) is None:
+                continue
+
+            key = _normalize_item_key(normalized)
+
+            if key in lookup and lookup[key] != part:
+                ambiguous.add(key)
+            else:
+                lookup[key] = part
+
+    for key in ambiguous:
+        lookup.pop(key, None)
+
+    return lookup
+
+
+def _resolve_section_label(
+    item_label: str,
+    part_by_item: dict[str, str],
+) -> tuple[str, str] | None:
+    """
+    Resolve one parser item label to ``(part, item)`` without guessing.
+
+    Prefers the label's own ``Part X, Item Y`` prefix.  Falls back to the
+    parser's part structure only when the item maps to exactly one Part.
+    """
+
+    text = str(item_label).strip()
+
+    prefixed = _PART_ITEM_LABEL_RE.match(text)
+
+    if prefixed is not None:
+        return prefixed.group(1).upper(), prefixed.group(2)
+
+    if _BARE_ITEM_LABEL_RE.fullmatch(text) is None:
+        return None
+
+    part = part_by_item.get(_normalize_item_key(text))
+
+    if part is None:
+        return None
+
+    return part, text
+
+
+# ----------------------------------------------------------------
 # OpenAI LLM Repair
 # ----------------------------------------------------------------
 def _llm_repair(
@@ -1398,6 +1520,10 @@ def _build(
 
     items = list(obj.items)
 
+    # edgartools returns bare "Item N" labels for some 10-K filings; the Part is
+    # recovered from the parser's own part structure rather than guessed.
+    part_by_item = _item_part_lookup(obj)
+
     for item_label in _progress_items(
         items,
         total=len(items),
@@ -1408,15 +1534,15 @@ def _build(
         # 例如：
         # Part I, Item 1
         # Part II, Item 1A
+        # 或（部分 10-K）：
+        # Item 1
 
-        m = re.match(
-            r"Part\s+([IVX]+)\s*,\s*"
-            r"(Item\s+[\w.]+)",
+        resolved_label = _resolve_section_label(
             item_label,
-            re.I,
+            part_by_item,
         )
 
-        if not m:
+        if resolved_label is None:
 
             warnings.append(
                 f"item label 解析失败: "
@@ -1425,13 +1551,10 @@ def _build(
 
             continue
 
-        part = m.group(1)
-        item = m.group(2)
+        part, item = resolved_label
 
-        normalized_item = (
-            item.lower()
-            .replace(" ", "_")
-            .replace(".", "")
+        normalized_item = _normalize_item_key(
+            item
         )
 
         key = (

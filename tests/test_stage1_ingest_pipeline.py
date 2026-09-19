@@ -14,7 +14,13 @@ from thesis_tracker.ingest.filing_selection import (
     SourceFiling,
 )
 from thesis_tracker.ingest.pipeline import IngestCoordinator, IngestPaths
-from thesis_tracker.ingest.sec_adapter import CanonicalDoc, Chunk, sha256
+from thesis_tracker.ingest.sec_adapter import (
+    CanonicalDoc,
+    Chunk,
+    _item_part_lookup,
+    _resolve_section_label,
+    sha256,
+)
 from thesis_tracker.retrieve.bm25 import BM25Retriever
 from thesis_tracker.retrieve.vector import IndexStats, VectorRetriever
 
@@ -317,3 +323,52 @@ def test_ingested_amendment_family_is_searchable_through_stage2(
     assert {result.form_type for result in vectors} == {"10-Q", "10-Q/A"}
     assert first.index_stats.embedded_chunks == 2
     assert second.index_stats.embedded_chunks == 0
+
+
+class _Structure:
+    def __init__(self, parts: dict[str, object]) -> None:
+        self.structure = parts
+
+
+class _ParsedReport:
+    def __init__(self, parts: dict[str, object]) -> None:
+        self.structure = _Structure(parts)
+
+
+def test_bare_item_labels_resolve_part_from_edgar_structure() -> None:
+    report = _ParsedReport(
+        {
+            "PART I": {"ITEM 1": {}, "ITEM 1A": {}, "ITEM 4": {}},
+            "PART II": {"ITEM 5": {}, "ITEM 7": {}, "ITEM 7A": {}},
+        }
+    )
+    part_by_item = _item_part_lookup(report)
+
+    assert _resolve_section_label("Item 1", part_by_item) == ("I", "Item 1")
+    assert _resolve_section_label("Item 7A", part_by_item) == ("II", "Item 7A")
+    assert _resolve_section_label("Item 9", part_by_item) is None
+
+
+def test_part_prefixed_labels_keep_their_own_part() -> None:
+    part_by_item = _item_part_lookup(_ParsedReport({}))
+
+    assert _resolve_section_label("Part II, Item 1", part_by_item) == (
+        "II",
+        "Item 1",
+    )
+    assert _resolve_section_label("Part I, Item 1", part_by_item) == (
+        "I",
+        "Item 1",
+    )
+
+
+def test_ambiguous_bare_items_never_guess_a_part() -> None:
+    report = _ParsedReport(
+        {
+            "PART I": {"ITEM 1": {}},
+            "PART II": {"ITEM 1": {}},
+        }
+    )
+    part_by_item = _item_part_lookup(report)
+
+    assert _resolve_section_label("Item 1", part_by_item) is None
