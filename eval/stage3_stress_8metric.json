@@ -151,41 +151,6 @@
     ],
     "ar_growth_vs_rev_growth": [
       {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2023-Q4",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "AAPL"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "AMD"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "AMZN"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2023-Q4",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "AVGO"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "GOOGL"
-      },
-      {
         "code": "not_applicable",
         "concept": "ar_growth_vs_rev_growth",
         "period": "2026-Q2",
@@ -249,38 +214,10 @@
         "ticker": "LITE"
       },
       {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "META"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2024-Q1",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "MSFT"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2024-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "NVDA"
-      },
-      {
         "code": "invalid_context",
         "concept": "accounts_receivable",
         "period": "2026-Q1",
         "reason": "fact metadata conflicts with the filing reporting context",
-        "ticker": "ORCL"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2024-Q2",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
         "ticker": "ORCL"
       },
       {
@@ -324,20 +261,6 @@
         "period": "2025-Q2",
         "reason": "no comparable year-ago fiscal boundary; YoY growth cannot be proven",
         "ticker": "SNDK"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "TSLA"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "revenue",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "VRT"
       },
       {
         "code": "period_unavailable",
@@ -561,13 +484,6 @@
         "ticker": "AMD"
       },
       {
-        "code": "period_unavailable",
-        "concept": "diluted_weighted_average_shares",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "AMD"
-      },
-      {
         "code": "duration_unavailable",
         "concept": "diluted_weighted_average_shares",
         "period": "2025-Q4",
@@ -579,13 +495,6 @@
         "concept": "diluted_weighted_average_shares",
         "period": "2024-Q4",
         "reason": "diluted_weighted_average_shares is not additive and does not support Q4 YTD/Q4 derivation",
-        "ticker": "AMZN"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "diluted_weighted_average_shares",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
         "ticker": "AMZN"
       },
       {
@@ -642,13 +551,6 @@
         "concept": "diluted_weighted_average_shares",
         "period": "2024-Q4",
         "reason": "diluted_weighted_average_shares is not additive and does not support Q4 YTD/Q4 derivation",
-        "ticker": "JPM"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "diluted_weighted_average_shares",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
         "ticker": "JPM"
       },
       {
@@ -666,13 +568,6 @@
         "ticker": "LITE"
       },
       {
-        "code": "period_unavailable",
-        "concept": "diluted_weighted_average_shares",
-        "period": "2024-Q1",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "LITE"
-      },
-      {
         "code": "duration_unavailable",
         "concept": "diluted_weighted_average_shares",
         "period": "2025-Q4",
@@ -684,13 +579,6 @@
         "concept": "diluted_weighted_average_shares",
         "period": "2024-Q4",
         "reason": "diluted_weighted_average_shares is not additive and does not support Q4 YTD/Q4 derivation",
-        "ticker": "META"
-      },
-      {
-        "code": "period_unavailable",
-        "concept": "diluted_weighted_average_shares",
-        "period": "2023-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
         "ticker": "META"
       },
       {
@@ -764,13 +652,6 @@
         "ticker": "NVDA"
       },
       {
-        "code": "period_unavailable",
-        "concept": "diluted_weighted_average_shares",
-        "period": "2024-Q3",
-        "reason": "the immediately preceding fiscal boundary is unavailable",
-        "ticker": "NVDA"
-      },
-      {
         "code": "registry_gap",
         "concept": "diluted_weighted_average_shares",
         "period": "2026-Q1",
@@ -825,6 +706,48 @@
         "period": "2025-Q2",
         "reason": "no fact uses a registered concept; custom and unregistered concepts have not been ruled out",
         "ticker": "ORCL"
+      },
+      {
+        "code": "duration_unavailable",
+        "concept": "diluted_weighted_average_shares",
+        "period": "2026-Q4",
+        "reason": "diluted_weighted_average_shares is not additive and does not support Q4 YTD/Q4 derivation",
+        "ticker": "SNDK"
+      },
+      {
+        "code": "invalid_context",
+        "concept": "diluted_weighted_average_shares",
+        "period": "2025-Q2",
+        "reason": "facts ending at the target boundary belong to another accession",
+        "ticker": "SNDK"
+      },
+      {
+        "code": "period_unavailable",
+        "concept": "diluted_weighted_average_shares",
+        "period": "2026-Q1",
+        "reason": "no comparable year-ago fiscal boundary for diluted shares",
+        "ticker": "SNDK"
+      },
+      {
+        "code": "period_unavailable",
+        "concept": "diluted_weighted_average_shares",
+        "period": "2025-Q4",
+        "reason": "no comparable year-ago fiscal boundary for diluted shares",
+        "ticker": "SNDK"
+      },
+      {
+        "code": "period_unavailable",
+        "concept": "diluted_weighted_average_shares",
+        "period": "2025-Q3",
+        "reason": "no comparable year-ago fiscal boundary for diluted shares",
+        "ticker": "SNDK"
+      },
+      {
+        "code": "period_unavailable",
+        "concept": "diluted_weighted_average_shares",
+        "period": "2025-Q2",
+        "reason": "no comparable year-ago fiscal boundary for diluted shares",
+        "ticker": "SNDK"
       }
     ],
     "interest_coverage": [
@@ -1610,10 +1533,10 @@
     "old_observations": 93
   },
   "overall": {
-    "coverage": 0.5618247298919568,
+    "coverage": 0.5846338535414166,
     "requested": 833,
-    "success": 468,
-    "unavailable": 365
+    "success": 487,
+    "unavailable": 346
   },
   "per_metric": {
     "accruals_ratio": {
@@ -1629,17 +1552,17 @@
       "unavailable": 21
     },
     "ar_growth_vs_rev_growth": {
-      "coverage": 0.6638655462184874,
+      "coverage": 0.7563025210084033,
       "failure_taxonomy": {
         "ambiguous": 1,
         "invalid_context": 1,
         "not_applicable": 1,
-        "period_unavailable": 22,
+        "period_unavailable": 11,
         "registry_gap": 8
       },
       "requested": 119,
-      "success": 79,
-      "unavailable": 40
+      "success": 90,
+      "unavailable": 29
     },
     "cash_conversion": {
       "coverage": 0.8235294117647058,
@@ -1654,16 +1577,16 @@
       "unavailable": 21
     },
     "diluted_share_count_yoy": {
-      "coverage": 0.4789915966386555,
+      "coverage": 0.5462184873949579,
       "failure_taxonomy": {
         "duration_unavailable": 23,
         "invalid_context": 3,
-        "period_unavailable": 12,
+        "period_unavailable": 4,
         "registry_gap": 24
       },
       "requested": 119,
-      "success": 57,
-      "unavailable": 62
+      "success": 65,
+      "unavailable": 54
     },
     "interest_coverage": {
       "coverage": 0.7310924369747899,
@@ -1711,10 +1634,8 @@
           "observations": 8
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {},
@@ -1756,10 +1677,8 @@
           "observations": 6
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {
@@ -1769,10 +1688,9 @@
         },
         "diluted_share_count_yoy": {
           "failures": {
-            "duration_unavailable": 2,
-            "period_unavailable": 1
+            "duration_unavailable": 2
           },
-          "observations": 5
+          "observations": 6
         },
         "interest_coverage": {
           "failures": {},
@@ -1803,10 +1721,8 @@
           "observations": 8
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {},
@@ -1814,10 +1730,9 @@
         },
         "diluted_share_count_yoy": {
           "failures": {
-            "duration_unavailable": 2,
-            "period_unavailable": 1
+            "duration_unavailable": 2
           },
-          "observations": 5
+          "observations": 6
         },
         "interest_coverage": {
           "failures": {},
@@ -1850,10 +1765,8 @@
           "observations": 7
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {
@@ -1898,10 +1811,8 @@
           "observations": 8
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {},
@@ -1956,10 +1867,9 @@
         },
         "diluted_share_count_yoy": {
           "failures": {
-            "duration_unavailable": 2,
-            "period_unavailable": 1
+            "duration_unavailable": 2
           },
-          "observations": 5
+          "observations": 6
         },
         "interest_coverage": {
           "failures": {
@@ -2002,10 +1912,9 @@
         },
         "diluted_share_count_yoy": {
           "failures": {
-            "duration_unavailable": 2,
-            "period_unavailable": 1
+            "duration_unavailable": 2
           },
-          "observations": 5
+          "observations": 6
         },
         "interest_coverage": {
           "failures": {},
@@ -2035,10 +1944,8 @@
           "observations": 8
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {},
@@ -2046,10 +1953,9 @@
         },
         "diluted_share_count_yoy": {
           "failures": {
-            "duration_unavailable": 2,
-            "period_unavailable": 1
+            "duration_unavailable": 2
           },
-          "observations": 5
+          "observations": 6
         },
         "interest_coverage": {
           "failures": {
@@ -2084,10 +1990,8 @@
           "observations": 8
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {},
@@ -2128,10 +2032,8 @@
           "observations": 8
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {},
@@ -2139,10 +2041,9 @@
         },
         "diluted_share_count_yoy": {
           "failures": {
-            "duration_unavailable": 2,
-            "period_unavailable": 1
+            "duration_unavailable": 2
           },
-          "observations": 5
+          "observations": 6
         },
         "interest_coverage": {
           "failures": {},
@@ -2173,10 +2074,9 @@
         },
         "ar_growth_vs_rev_growth": {
           "failures": {
-            "invalid_context": 1,
-            "period_unavailable": 1
+            "invalid_context": 1
           },
-          "observations": 6
+          "observations": 7
         },
         "cash_conversion": {
           "failures": {
@@ -2276,10 +2176,8 @@
           "observations": 0
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {
@@ -2289,10 +2187,9 @@
         },
         "diluted_share_count_yoy": {
           "failures": {
-            "duration_unavailable": 2,
-            "period_unavailable": 1
+            "duration_unavailable": 2
           },
-          "observations": 5
+          "observations": 6
         },
         "interest_coverage": {
           "failures": {},
@@ -2322,10 +2219,8 @@
           "observations": 8
         },
         "ar_growth_vs_rev_growth": {
-          "failures": {
-            "period_unavailable": 1
-          },
-          "observations": 7
+          "failures": {},
+          "observations": 8
         },
         "cash_conversion": {
           "failures": {},
@@ -2333,10 +2228,9 @@
         },
         "diluted_share_count_yoy": {
           "failures": {
-            "duration_unavailable": 2,
-            "period_unavailable": 1
+            "duration_unavailable": 2
           },
-          "observations": 5
+          "observations": 6
         },
         "interest_coverage": {
           "failures": {},
@@ -2796,14 +2690,7 @@
         ]
       },
       "ar_growth_vs_rev_growth": {
-        "failures": [
-          {
-            "code": "period_unavailable",
-            "concept": "revenue",
-            "period": "2023-Q3",
-            "reason": "the immediately preceding fiscal boundary is unavailable"
-          }
-        ],
+        "failures": [],
         "observations": [
           {
             "accession": "0000002488-26-000123",
@@ -3228,6 +3115,64 @@
             "formula": "accounts_receivable_yoy - revenue_yoy",
             "period_end": "2024-12-28",
             "value": "-0.0897836761163609412636649991"
+          },
+          {
+            "accession": "0000002488-24-000163",
+            "facts": [
+              {
+                "accession": "0000002488-24-000163",
+                "concept": "us-gaap:AccountsReceivableNetCurrent",
+                "context_id": "c-6",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "7241000000"
+              },
+              {
+                "accession": "0000002488-23-000195",
+                "concept": "us-gaap:AccountsReceivableNetCurrent",
+                "context_id": "c-6",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "5054000000"
+              },
+              {
+                "accession": "0000002488-24-000163",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "context_id": "c-3",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "6819000000"
+              },
+              {
+                "accession": "0000002488-23-000195",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "context_id": "c-3",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "5800000000"
+              }
+            ],
+            "fiscal_period": "Q3",
+            "fiscal_year": 2024,
+            "formula": "accounts_receivable_yoy - revenue_yoy",
+            "period_end": "2024-09-28",
+            "value": "0.2570368980527543905134888036"
           }
         ]
       },
@@ -3487,12 +3432,6 @@
             "concept": "diluted_weighted_average_shares",
             "period": "2024-Q4",
             "reason": "diluted_weighted_average_shares is not additive and does not support Q4 YTD/Q4 derivation"
-          },
-          {
-            "code": "period_unavailable",
-            "concept": "diluted_weighted_average_shares",
-            "period": "2023-Q3",
-            "reason": "the immediately preceding fiscal boundary is unavailable"
           }
         ],
         "observations": [
@@ -3665,6 +3604,40 @@
             "formula": "(diluted_weighted_average_shares - prior_year_diluted_weighted_average_shares) / prior_year_diluted_weighted_average_shares",
             "period_end": "2025-03-29",
             "value": "-0.007931665649786455155582672361"
+          },
+          {
+            "accession": "0000002488-24-000163",
+            "facts": [
+              {
+                "accession": "0000002488-24-000163",
+                "concept": "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+                "context_id": "c-3",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "1636000000"
+              },
+              {
+                "accession": "0000002488-23-000195",
+                "concept": "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+                "context_id": "c-3",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "1629000000"
+              }
+            ],
+            "fiscal_period": "Q3",
+            "fiscal_year": 2024,
+            "formula": "(diluted_weighted_average_shares - prior_year_diluted_weighted_average_shares) / prior_year_diluted_weighted_average_shares",
+            "period_end": "2024-09-28",
+            "value": "0.004297114794352363413136893800"
           }
         ]
       },
@@ -4905,12 +4878,6 @@
             "concept": "diluted_weighted_average_shares",
             "period": "2024-Q4",
             "reason": "diluted_weighted_average_shares is not additive and does not support Q4 YTD/Q4 derivation"
-          },
-          {
-            "code": "period_unavailable",
-            "concept": "diluted_weighted_average_shares",
-            "period": "2023-Q3",
-            "reason": "the immediately preceding fiscal boundary is unavailable"
           }
         ],
         "observations": [
@@ -5083,6 +5050,40 @@
             "formula": "(diluted_weighted_average_shares - prior_year_diluted_weighted_average_shares) / prior_year_diluted_weighted_average_shares",
             "period_end": "2025-03-31",
             "value": "-0.03038313650096127437517165614"
+          },
+          {
+            "accession": "0000019617-24-000611",
+            "facts": [
+              {
+                "accession": "0000019617-24-000611",
+                "concept": "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+                "context_id": "c-12",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "2865900000"
+              },
+              {
+                "accession": "0000019617-23-000524",
+                "concept": "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+                "context_id": "c-12",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "2932100000"
+              }
+            ],
+            "fiscal_period": "Q3",
+            "fiscal_year": 2024,
+            "formula": "(diluted_weighted_average_shares - prior_year_diluted_weighted_average_shares) / prior_year_diluted_weighted_average_shares",
+            "period_end": "2024-09-30",
+            "value": "-0.02257767470413696667917192456"
           }
         ]
       },
@@ -6039,12 +6040,6 @@
             "concept": "diluted_weighted_average_shares",
             "period": "2025-Q4",
             "reason": "diluted_weighted_average_shares is not additive and does not support Q4 YTD/Q4 derivation"
-          },
-          {
-            "code": "period_unavailable",
-            "concept": "diluted_weighted_average_shares",
-            "period": "2024-Q1",
-            "reason": "the immediately preceding fiscal boundary is unavailable"
           }
         ],
         "observations": [
@@ -6217,6 +6212,40 @@
             "formula": "(diluted_weighted_average_shares - prior_year_diluted_weighted_average_shares) / prior_year_diluted_weighted_average_shares",
             "period_end": "2024-12-28",
             "value": "0.02529761904761904761904761905"
+          },
+          {
+            "accession": "0001628280-24-046443",
+            "facts": [
+              {
+                "accession": "0001628280-24-046443",
+                "concept": "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+                "context_id": "c-1",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "68300000"
+              },
+              {
+                "accession": "0001628280-23-037591",
+                "concept": "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+                "context_id": "c-1",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "66700000"
+              }
+            ],
+            "fiscal_period": "Q1",
+            "fiscal_year": 2025,
+            "formula": "(diluted_weighted_average_shares - prior_year_diluted_weighted_average_shares) / prior_year_diluted_weighted_average_shares",
+            "period_end": "2024-09-28",
+            "value": "0.02398800599700149925037481259"
           }
         ]
       },
@@ -7532,14 +7561,7 @@
         ]
       },
       "ar_growth_vs_rev_growth": {
-        "failures": [
-          {
-            "code": "period_unavailable",
-            "concept": "revenue",
-            "period": "2024-Q3",
-            "reason": "the immediately preceding fiscal boundary is unavailable"
-          }
-        ],
+        "failures": [],
         "observations": [
           {
             "accession": "0001045810-26-000075",
@@ -7962,6 +7984,64 @@
             "formula": "accounts_receivable_yoy - revenue_yoy",
             "period_end": "2025-01-26",
             "value": "0.5272889683213446440784873857"
+          },
+          {
+            "accession": "0001045810-24-000316",
+            "facts": [
+              {
+                "accession": "0001045810-24-000316",
+                "concept": "us-gaap:AccountsReceivableNetCurrent",
+                "context_id": "c-6",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "17693000000"
+              },
+              {
+                "accession": "0001045810-23-000227",
+                "concept": "us-gaap:AccountsReceivableNetCurrent",
+                "context_id": "c-6",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "8309000000"
+              },
+              {
+                "accession": "0001045810-24-000316",
+                "concept": "us-gaap:Revenues",
+                "context_id": "c-3",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "35082000000"
+              },
+              {
+                "accession": "0001045810-23-000227",
+                "concept": "us-gaap:Revenues",
+                "context_id": "c-3",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "18120000000"
+              }
+            ],
+            "fiscal_period": "Q3",
+            "fiscal_year": 2025,
+            "formula": "accounts_receivable_yoy - revenue_yoy",
+            "period_end": "2024-10-27",
+            "value": "0.1932850678949419722809145755"
           }
         ]
       },
@@ -8287,12 +8367,6 @@
             "concept": "diluted_weighted_average_shares",
             "period": "2025-Q4",
             "reason": "diluted_weighted_average_shares is not additive and does not support Q4 YTD/Q4 derivation"
-          },
-          {
-            "code": "period_unavailable",
-            "concept": "diluted_weighted_average_shares",
-            "period": "2024-Q3",
-            "reason": "the immediately preceding fiscal boundary is unavailable"
           }
         ],
         "observations": [
@@ -8465,6 +8539,40 @@
             "formula": "(diluted_weighted_average_shares - prior_year_diluted_weighted_average_shares) / prior_year_diluted_weighted_average_shares",
             "period_end": "2025-04-27",
             "value": "8.887906789875451988750502210"
+          },
+          {
+            "accession": "0001045810-24-000316",
+            "facts": [
+              {
+                "accession": "0001045810-24-000316",
+                "concept": "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+                "context_id": "c-3",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "24774000000"
+              },
+              {
+                "accession": "0001045810-23-000227",
+                "concept": "us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+                "context_id": "c-3",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "2494000000"
+              }
+            ],
+            "fiscal_period": "Q3",
+            "fiscal_year": 2025,
+            "formula": "(diluted_weighted_average_shares - prior_year_diluted_weighted_average_shares) / prior_year_diluted_weighted_average_shares",
+            "period_end": "2024-10-27",
+            "value": "8.933440256615878107457898957"
           }
         ]
       },
@@ -9774,12 +9882,6 @@
             "concept": "accounts_receivable",
             "period": "2026-Q1",
             "reason": "fact metadata conflicts with the filing reporting context"
-          },
-          {
-            "code": "period_unavailable",
-            "concept": "revenue",
-            "period": "2024-Q2",
-            "reason": "the immediately preceding fiscal boundary is unavailable"
           }
         ],
         "observations": [
@@ -10150,6 +10252,64 @@
             "formula": "accounts_receivable_yoy - revenue_yoy",
             "period_end": "2025-02-28",
             "value": "0.03932411157580851018160623860"
+          },
+          {
+            "accession": "0000950170-24-134973",
+            "facts": [
+              {
+                "accession": "0000950170-24-134973",
+                "concept": "us-gaap:AccountsReceivableNetCurrent",
+                "context_id": "C_b02cf24d-f63d-45a5-a625-6bc460a569e9",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "8177000000"
+              },
+              {
+                "accession": "0000950170-23-069682",
+                "concept": "us-gaap:AccountsReceivableNetCurrent",
+                "context_id": "C_7aba2b0d-04f9-4afe-89a6-3c4097f5eab7",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "6804000000"
+              },
+              {
+                "accession": "0000950170-24-134973",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "context_id": "C_57e4f302-9292-4ac5-bc24-2dd218a1d93c",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "14059000000"
+              },
+              {
+                "accession": "0000950170-23-069682",
+                "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "context_id": "C_9c2197f2-29d2-4e15-971f-13f393f48bf1",
+                "origin": "reported",
+                "resolver_path": [
+                  "stage1_boundary",
+                  "filing_xbrl"
+                ],
+                "source_fact_ids": [],
+                "value": "12941000000"
+              }
+            ],
+            "fiscal_period": "Q2",
+            "fiscal_year": 2025,
+            "formula": "accounts_receivable_yoy - revenue_yoy",
+            "period_end": "2024-11-30",
+            "value": "0.1154009757393490403991052232"
           }
         ]
       },
