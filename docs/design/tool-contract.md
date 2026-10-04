@@ -43,6 +43,9 @@
   权威定义见 `.agents/skills/failure-taxonomy/SKILL.md`。
 - 价格类新增三个原因代码：`no_data`、`rate_limited`（被限流）、`provider_error`
   （数据提供方报错）。
+- 技术指标值新增 `insufficient_history`：该指标需要 N 根，实际只有 M 根时，
+  仅该值为 `null`，同一日期的其他指标继续返回。RSI 在价格无变化时用
+  `no_price_change` 说明未定义；零分母用 `zero_denominator`。
 
 ---
 
@@ -71,7 +74,7 @@
 | 工具 | 说明 |
 |---|---|
 | `get_price_history` | 价格历史 |
-| `get_indicators` | 技术指标 |
+| `get_indicators` | 技术指标；只读 `prices.db` 中同批次复权价，按 `as_of` 计算，入口为 `thesis_tracker.agent.tools.get_indicators`，定义见 `docs/design/indicators.md` |
 | `get_fundamental_metrics` | 包装 Stage 3 |
 | `search_filings` | 包装 Stage 2，带引用 |
 
@@ -239,3 +242,11 @@
   `/tiingo/daily/<ticker>/prices`，存入 `data/cache/prices.db` 的独立 SQLite
   表，建表即用。依据：Tiingo 官方日线文档、本轮三标的实测及现有
   `.gitignore` 对 `data/cache/` 的忽略。Decision Mode 建议卡的存储位置仍待定。
+- **已定（2026-10-03）**：`get_indicators` 与价格工具共用 `dict` envelope、
+  100 行上限及 `end_date=next_end_date` 分页。默认只返回截至 `as_of` 的
+  最新指标值；`full_history=True` 返回最多 100 个历史计算日。
+  `data_end_date` 与 `bars_used` 显示实际数据截止日与使用根数；
+  `source` 引用标的及 SPY 的同批次价格快照。依据：本轮工具及测试。
+- **已定（2026-10-03）**：单个 symbol 的复权价只允许同一次抓取的完整
+  快照；窗口扩展时整段重抓并在一个事务内替换旧行。缓存命中仅限完整、
+  单批次快照。依据：Tiingo 复权价会随公司行动回溯改变，本轮拆股回归测试。
