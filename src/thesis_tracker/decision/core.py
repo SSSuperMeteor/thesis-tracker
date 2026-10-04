@@ -315,8 +315,13 @@ def _connect(path: Path | str) -> sqlite3.Connection:
         as_of TEXT NOT NULL, creation_price TEXT, card_json TEXT NOT NULL, snapshot_json TEXT NOT NULL,
         snapshot_sha256 TEXT NOT NULL, validator_version TEXT NOT NULL,
         validation_json TEXT NOT NULL, requested_model TEXT, returned_model TEXT,
-        fingerprint TEXT, prompt_version TEXT
+        fingerprint TEXT, prompt_version TEXT, input_tokens INTEGER,
+        output_tokens INTEGER, cache_hit_tokens INTEGER
     )""")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(decision_cards)")}
+    for name in ("input_tokens", "output_tokens", "cache_hit_tokens"):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE decision_cards ADD COLUMN {name} INTEGER")
     for action in ("UPDATE", "DELETE"):
         conn.execute(f"""CREATE TRIGGER IF NOT EXISTS decision_cards_no_{action.lower()}
             BEFORE {action} ON decision_cards BEGIN SELECT RAISE(ABORT, 'immutable'); END""")
@@ -332,12 +337,17 @@ def append_card(path: Path | str, card: dict, snapshot: dict, *, model: dict | N
     snapshot_json = _canonical(snapshot)
     card_id = str(uuid.uuid4())
     with _connect(path) as conn:
-        conn.execute("INSERT INTO decision_cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+        conn.execute("""INSERT INTO decision_cards (
+            card_id, created_at, ticker, as_of, creation_price, card_json, snapshot_json,
+            snapshot_sha256, validator_version, validation_json, requested_model,
+            returned_model, fingerprint, prompt_version, input_tokens, output_tokens,
+            cache_hit_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
             card_id, datetime.now(timezone.utc).isoformat(), card["ticker"], card["as_of"],
             str(card["creation_price"]),
             _canonical(card), snapshot_json, hashlib.sha256(snapshot_json.encode()).hexdigest(),
             VALIDATOR_VERSION, _canonical(result), model.get("requested_model"), model.get("returned_model"),
-            model.get("fingerprint"), model.get("prompt_version"),
+            model.get("fingerprint"), model.get("prompt_version"), model.get("input_tokens"),
+            model.get("output_tokens"), model.get("cache_hit_tokens"),
         ))
     return card_id
 
