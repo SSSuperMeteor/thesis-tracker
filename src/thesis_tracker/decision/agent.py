@@ -21,8 +21,8 @@ from thesis_tracker.decision.core import (
     validate_card,
 )
 from thesis_tracker.decision.evidence import (
-    HISTORY_FIELDS,
     RESOLUTIONS,
+    TOOL_HISTORY_FIELDS,
     compact_tool_response,
     history_view,
     prepare_evidence,
@@ -32,13 +32,17 @@ from thesis_tracker.indicator_tool import get_indicators
 from thesis_tracker.prices import get_price_history
 
 MODEL = "deepseek-flash"
-PROMPT_VERSION = "decision-agent-v2-compact-2026-10-04"
+PROMPT_VERSION = "decision-agent-v3-tool-contract-2026-10-04"
 MAX_TOOL_CALLS = 12
 MAX_ROUNDS = 16
 MAX_TOTAL_TOKENS = 1_500_000
 SOFT_TOTAL_TOKENS = 1_000_000
 MAX_REQUEST_INPUT_TOKENS = 200_000
 MAX_REVISIONS = 2
+# Tiered history is only served for the target ticker; SPY exists on the default
+# latest page only.  Every model-visible text that names SPY states this limit
+# (the Chinese system prompt words the same restriction inline).
+SPY_NOTE_EN = "SPY is only available on the default latest page; tiered history requires the target ticker."
 
 SYSTEM_PROMPT = """你是 Decision Mode 研究判断模型。只使用基础包或工具返回中有 fact_id 的事实。
 你的立场必须明确：给出看多/中性/看空、买入/分批/持有/减仓/回避、具体买点、止损和目标。
@@ -48,7 +52,7 @@ Python 会按 fact_id 填值。理由和失效条件文字引用事实数字只�
 除 YYYY-MM-DD 日期、Q1-Q4/2026-Q3 财期及“3 个季度”类时间计数外，文字不写裸数字。
 每条理由至少列一个 fact_id。必须有 kind=close_below 或 close_above 且 price>0 的失效条件。
 不要隐瞒 unavailable、not_applicable 或 null；Python 自动把它们写进数据缺口。
-工具 as_of 由程序固定，永远不要在工具参数中传 as_of。可调用目标股票与 SPY。
+工具 as_of 由程序固定，永远不要在工具参数中传 as_of。可调用目标股票与 SPY（SPY 仅可用于默认最新页；分档历史只支持目标标的）。
 基础包已提供最新值和关键地标；历史按 resolution 与 fields 请求，只引用所见 fact_id。
 先选周期：短期优先 weekly_3m，中期优先 monthly_2y，长期优先 quarterly_5y；可按需加档。
 只输出一个 JSON 对象，不要 markdown。schema 示例：
@@ -62,13 +66,16 @@ Python 会按 fact_id 填值。理由和失效条件文字引用事实数字只�
 
 
 def _tool_schema(name: str, description: str, *, history: bool = True) -> dict:
-    properties = {"ticker": {"type": "string", "description": "Ticker symbol to inspect; use the target or SPY."}}
+    properties = {"ticker": {"type": "string",
+                             "description": f"Ticker symbol to inspect. {SPY_NOTE_EN}"}}
     if history:
+        fields = list(TOOL_HISTORY_FIELDS[name])
         properties.update({
             "resolution": {"type": "string", "enum": list(RESOLUTIONS),
                            "description": "Tiered history window; required for historical series."},
-            "fields": {"type": "array", "items": {"type": "string", "enum": list(HISTORY_FIELDS)},
-                       "maxItems": 5, "description": "Only requested core historical fields."},
+            "fields": {"type": "array", "items": {"type": "string", "enum": fields},
+                       "maxItems": len(fields),
+                       "description": f"Only requested core historical fields; {name} supports: {', '.join(fields)}."},
         })
     return {"type": "function", "function": {"name": name, "description": description,
             "parameters": {"type": "object", "additionalProperties": False,
@@ -226,20 +233,26 @@ def _tool_error(code: str, message: str) -> dict:
 def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str,
               snapshot: dict) -> tuple[dict | None, dict | None]:
     if name not in _TOOLS:
-        return None, _tool_error("unknown_tool", "只允许三个已列出的本地数据工具。")
+        return None, _tool_error("unknown_tool",
+                                 "只允许 get_price_history、get_indicators、get_fundamental_metrics 三个本地数据工具。")
     try:
         given = json.loads(raw_arguments)
     except (json.JSONDecodeError, TypeError):
-        return None, _tool_error("invalid_tool_arguments", "工具参数不是有效 JSON 对象。")
+        return None, _tool_error("invalid_tool_arguments",
+                                 '工具参数不是有效 JSON 对象；请传例如 {"ticker": "AAPL"}。')
     if not isinstance(given, dict):
-        return None, _tool_error("invalid_tool_arguments", "工具参数必须是 JSON 对象。")
+        return None, _tool_error("invalid_tool_arguments",
+                                 '工具参数必须是 JSON 对象；请传例如 {"ticker": "AAPL"}。')
     if "as_of" in given:
-        return None, _tool_error("as_of_forbidden", "as_of 由程序固定，工具参数中不能指定。")
-    if set(given) - {"ticker", "limit", "full_history", "end_date", "resolution", "fields"}:
-        return None, _tool_error("invalid_tool_arguments", "工具参数含未允许的字段。")
+        return None, _tool_error("as_of_forbidden", "as_of 由程序固定，工具参数中不能指定；请去掉 as_of。")
+    unknown = sorted(set(given) - {"ticker", "limit", "full_history", "end_date", "resolution", "fields"})
+    if unknown:
+        return None, _tool_error("invalid_tool_arguments",
+                                 f"工具参数含未允许的字段：{', '.join(unknown)}；"
+                                 "允许的字段：ticker, resolution, fields。")
     symbol = given.get("ticker")
     if not isinstance(symbol, str) or symbol.upper() not in {ticker, "SPY"}:
-        return None, _tool_error("invalid_ticker", "只能查询目标标的或 SPY。")
+        return None, _tool_error("invalid_ticker", f"只能查询目标标的 {ticker} 或 SPY。")
     symbol = symbol.upper()
     limit = given.get("limit")
     if limit is not None and (type(limit) is not int or not 1 <= limit <= 100):
@@ -253,27 +266,56 @@ def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str,
             if not isinstance(end_date, str) or date.fromisoformat(end_date) > date.fromisoformat(as_of):
                 raise ValueError
         except ValueError:
-            return None, _tool_error("invalid_tool_arguments", "end_date 必须是不晚于 as_of 的日期。")
+            return None, _tool_error("invalid_tool_arguments",
+                                     f"end_date 必须是不晚于 as_of（{as_of}）的日期。")
     resolution = given.get("resolution")
     fields = given.get("fields")
     if resolution is None and fields is not None:
-        return None, _tool_error("invalid_tool_arguments", "fields 需要同时指定 resolution。")
+        return None, _tool_error("invalid_tool_arguments",
+                                 "fields 需要同时指定 resolution；请补上 resolution，或去掉 fields。")
     if resolution is not None:
-        if name == "get_fundamental_metrics" or symbol != ticker or end_date is not None or full_history or limit is not None:
-            return None, _tool_error("invalid_tool_arguments", "分档历史只接受目标标的、resolution 和 fields。")
-        if not isinstance(resolution, str) or resolution not in RESOLUTIONS or not isinstance(fields, list) or (
-            not fields or not all(isinstance(item, str) for item in fields)
-        ):
-            return None, _tool_error("invalid_tool_arguments", "resolution 或 fields 无效。")
+        if name == "get_fundamental_metrics":
+            return None, _tool_error("invalid_tool_arguments",
+                                     "get_fundamental_metrics 不支持分档历史参数 resolution 和 fields，"
+                                     "它只返回最新一期及可得同比。")
+        if symbol != ticker:
+            return None, _tool_error("invalid_tool_arguments",
+                                     f"分档历史只支持目标标的 {ticker}；SPY 仅可用于默认最新页。")
+        if end_date is not None or full_history or limit is not None:
+            return None, _tool_error("invalid_tool_arguments",
+                                     "分档历史只接受 ticker、resolution 和 fields；"
+                                     "请去掉 limit、full_history、end_date。")
+        allowed = list(TOOL_HISTORY_FIELDS[name])
+        if not isinstance(resolution, str) or resolution not in RESOLUTIONS:
+            return None, _tool_error("invalid_tool_arguments",
+                                     f"resolution 无效；可选值：{', '.join(RESOLUTIONS)}。")
+        if not isinstance(fields, list) or not fields or not all(isinstance(item, str) for item in fields):
+            if fields is None:
+                return None, _tool_error("invalid_tool_arguments",
+                                         f"resolution 需要同时指定 fields；{name} 支持：{', '.join(allowed)}。")
+            return None, _tool_error("invalid_tool_arguments",
+                                     f"fields 必须是非空字符串数组；{name} 支持：{', '.join(allowed)}。")
+        unsupported = [item for item in fields if item not in allowed]
+        if unsupported:
+            return None, _tool_error("invalid_tool_arguments",
+                                     f"字段 {', '.join(unsupported)} 不适用于 {name}；"
+                                     f"{name} 支持：{', '.join(allowed)}。")
         try:
             envelope = history_view(snapshot, name, resolution, fields)
         except ValueError:
-            return None, _tool_error("invalid_tool_arguments", "该工具不支持指定的历史字段。")
+            return None, _tool_error("invalid_tool_arguments",
+                                     f"history 请求无效；{name} 支持 resolution "
+                                     f"{', '.join(RESOLUTIONS)} 与字段 {', '.join(allowed)}。")
         return {"tool": name, "args": {"ticker": symbol, "as_of": as_of,
                 "resolution": resolution, "fields": fields}, "envelope": envelope,
                 "model_envelope": envelope, "view_only": True}, None
     if full_history:
-        return None, _tool_error("resolution_required", "原始历史页不供模型读取；请指定 resolution 和 fields 请求分档历史。")
+        if name in TOOL_HISTORY_FIELDS:
+            hint = (f"请指定 resolution（可选值：{', '.join(RESOLUTIONS)}）和 fields"
+                    f"（{name} 支持：{', '.join(TOOL_HISTORY_FIELDS[name])}）请求分档历史。")
+        else:
+            hint = "该工具不支持分档历史；它只返回最新一期及可得同比。"
+        return None, _tool_error("resolution_required", f"原始历史页不供模型读取；{hint}")
     key = "ticker" if name == "get_fundamental_metrics" else "symbol"
     args = {key: symbol, "as_of": as_of, "limit": limit,
             "full_history": full_history, "end_date": end_date}

@@ -13,8 +13,24 @@ from thesis_tracker.indicator_tool import get_indicators
 from thesis_tracker.prices import get_price_history
 
 MAX_ENVELOPE_BYTES = 32 * 1024
-HISTORY_FIELDS = ("close", "adjusted_close", "rsi_14", "macd_histogram", "volume_ratio_20")
 RESOLUTIONS = ("daily_10", "weekly_3m", "monthly_2y", "quarterly_5y")
+
+# The only fields each history-capable tool actually serves.  The model-facing
+# tool schema, the catalog text and ``history_view`` all read this mapping, so
+# the advertised enum cannot drift away from what dispatch accepts.
+TOOL_HISTORY_FIELDS = {
+    "get_price_history": ("close", "adjusted_close"),
+    "get_indicators": ("rsi_14", "macd_histogram", "volume_ratio_20"),
+}
+
+# Full history-field vocabulary, derived from the per-tool mapping above.
+HISTORY_FIELDS = tuple(field for fields in TOOL_HISTORY_FIELDS.values() for field in fields)
+
+
+def history_field_help() -> str:
+    """Describe the per-tool history fields for model-visible catalog text."""
+    return "；".join(f"{tool} 支持字段: {', '.join(fields)}"
+                     for tool, fields in TOOL_HISTORY_FIELDS.items())
 
 
 def display_value(value: object, unit: str) -> str | None:
@@ -251,7 +267,7 @@ def prepare_evidence(ticker: str, as_of: str) -> tuple[dict, dict, str]:
                "get_indicators(RSI/MACD/volume); get_fundamental_metrics(SEC ratios). "
                "价格/指标历史分辨率与约数: daily_10 4/6 KiB; weekly_3m 6/8 KiB; "
                "monthly_2y 9/14 KiB; quarterly_5y 8/12 KiB。财务工具只展示最新值，"
-               "同比事实已在基础包；其它指标只支持最新值。可选历史字段: " + ", ".join(HISTORY_FIELDS) +
+               "同比事实已在基础包；其它指标只支持最新值。" + history_field_help() +
                "。价格与指标定义: " + "; ".join(names) + "。财务定义: " + "; ".join(metrics))
     return snapshot, base, catalog
 
@@ -293,8 +309,7 @@ def compact_tool_response(record: dict) -> dict:
 def history_view(snapshot: dict, tool: str, resolution: str, fields: list[str]) -> dict:
     if resolution not in RESOLUTIONS or tool not in {"get_price_history", "get_indicators"}:
         raise ValueError("unsupported history request")
-    allowed = {"close", "adjusted_close"} if tool == "get_price_history" else {
-        "rsi_14", "macd_histogram", "volume_ratio_20"}
+    allowed = set(TOOL_HISTORY_FIELDS[tool])
     if not fields or set(fields) - allowed:
         raise ValueError("unsupported fields")
     prices = _price_rows(snapshot)

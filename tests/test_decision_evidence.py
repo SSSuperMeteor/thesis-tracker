@@ -35,6 +35,23 @@ def test_existing_fact_ids_and_exact_values_match_prechange_snapshot(ticker):
     }
 
 
+@pytest.mark.parametrize("ticker", ["AAPL", "NVDA"])
+def test_fact_id_regression_reports_no_added_disappeared_or_changed_ids(ticker):
+    """Counts before/after a change: total, identical, added, disappeared, changed."""
+    before = json.loads(BASELINE.read_text())[ticker]["fact_index"]
+    after = fact_index(capture_snapshot(ticker, "2026-10-04"))[0]
+    before_ids, after_ids = set(before), set(after)
+    identical = before_ids & after_ids
+    added = sorted(after_ids - before_ids)
+    disappeared = sorted(before_ids - after_ids)
+    changed = sorted(key for key in identical if before[key]["value"] != after[key]["value"])
+    assert disappeared == [], f"{ticker} disappeared fact_ids: {disappeared}"
+    assert added == [], f"{ticker} added fact_ids: {added}"
+    assert changed == [], f"{ticker} changed values: {changed}"
+    assert len(after_ids) == len(before_ids)
+    assert len(identical) == len(before_ids)
+
+
 def test_week_and_month_use_last_actual_trading_day_with_gaps():
     days = ["2026-01-29", "2026-01-30", "2026-02-02", "2026-02-05",
             "2026-02-10", "2026-02-27", "2026-03-02"]
