@@ -65,7 +65,6 @@ TARGET_CHUNK_CHARS = 3000
 OVERLAP_CHARS = 500
 COLLECTION_NAME = "sec_chunks_qwen3_vl_embedding_1024_chunkv2"
 RETRIEVAL_LIMIT = 20
-TOP_K_LEVELS = (1, 3, 5, 10, 20)
 METRIC_KEYS = (
     "recall_at_1",
     "recall_at_3",
@@ -147,15 +146,6 @@ def _method_record(
         rank=rank,
         preview_chars=preview_chars,
     )
-
-
-def _parent_ranks(results: Sequence[Any], resolve: Callable[[str], str]) -> dict[str, int]:
-    """Map each logical parent to the best rank it achieved in a result list."""
-    best: dict[str, int] = {}
-    for rank, result in enumerate(results, start=1):
-        parent_id = resolve(result.chunk_id)
-        best.setdefault(parent_id, rank)
-    return best
 
 
 def _crowding_for_method(
