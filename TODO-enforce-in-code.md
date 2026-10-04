@@ -95,3 +95,14 @@ discovery 层能不能拿到一个经过验证的真实 regression case。
 | 价位不自洽 | D05；`test_hold_and_avoid_price_rules`、对抗变异 |
 | 缺少数据缺口披露 | D06；对抗变异 |
 | 缺少机器可检查的失效条件 | D07；对抗变异、`test_every_invalidation_price_must_be_positive` |
+
+## Agent 循环机械约束（已由代码强制，2026-10-04）
+
+`decision.agent.run_analysis` 固定工具 `as_of`、限制工具名和参数、限制
+12 次工具调用 / 16 轮 / 60k tokens / 2 次修正。`decision.agent.DeepSeekClient`
+限制 API 域名为官方 HTTPS 地址。`decision_attempts`、`decision_model_calls`
+仅可追加。对应 `tests/test_decision_agent.py` 的注入、四类限额、修正、
+断网、密钥哨兵、存档不可修改及超大历史页发送前拦截测试。
+
+真实 API 的三标的验证仍待定：2026-10-04 AAPL 首次调用已越过本轮 500k token
+总预算，因此本轮禁止继续调用 NVDA/TSLA。此为实测限制，不代表这些标的已验证。

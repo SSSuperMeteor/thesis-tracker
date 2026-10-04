@@ -199,3 +199,11 @@ Python 写入 `facts`、`gaps`、`confidence_calibration=未校准`、固定免�
 自由填写；自由文本里与快照事实值相同的数字即使写成不同小数精度也拒绝。
 其它裸数字也拒绝；失效价位放在 `price` 字段，不在文字里重复。
 依据：事实数字由 Python 渲染可复核；日期、周期和时间计数是语法标签或持续时间。
+
+## 11. DeepSeek 命令行循环（已定，2026-10-04）
+
+`uv run analyze TICKER [--as-of YYYY-MM-DD]` 使用第 10 节的建卡与 validator；
+通过才存档、渲染。`decision_cards` 增加累计输入/输出/缓存命中 token，
+追加式 `decision_attempts` 和 `decision_model_calls` 记录草稿尝试与每轮模型身份。
+`as_of` 由 Python 注入，工具清单与次数、轮数、token、修正次数在代码内限制。
+细节与真实验证边界见 [agent-loop.md](agent-loop.md)。
