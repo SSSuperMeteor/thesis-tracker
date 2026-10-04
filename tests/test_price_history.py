@@ -232,14 +232,76 @@ def test_paginated_summary_stays_at_as_of_latest(tmp_path):
     assert result["data"]["latest_close"]["value"] == 12
 
 
-def test_source_lists_all_returned_request_windows(tmp_path):
+def test_source_reports_replacement_request_window(tmp_path):
     db = tmp_path / "prices.db"
     ingest_price_history(["AAPL"], "2024-01-01", "2024-01-02", db_path=db,
                          provider=FakeProvider([row("2024-01-02")]))
     ingest_price_history(["AAPL"], "2024-01-03", "2024-01-04", db_path=db,
-                         provider=FakeProvider([row("2024-01-04")]))
+                         provider=FakeProvider([row("2024-01-02"), row("2024-01-04")]))
     result = get_price_history("AAPL", as_of="2024-01-04", db_path=db)
     assert result["source"]["request_windows"] == [
-        {"start_date": "2024-01-01", "end_date": "2024-01-02"},
-        {"start_date": "2024-01-03", "end_date": "2024-01-04"},
+        {"start_date": "2024-01-01", "end_date": "2024-01-04"},
     ]
+
+
+def test_split_refresh_replaces_entire_symbol_without_mixing_adjustment_bases(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "prices.db"
+    old = FakeProvider([row("2024-01-02", adjOpen=100, adjHigh=112, adjLow=90, adjClose=100), row("2024-01-03", adjOpen=100, adjHigh=112, adjLow=90, adjClose=110)])
+    ingest_price_history(["AAPL"], "2024-01-02", "2024-01-03", db_path=db, provider=old)
+    after_split = FakeProvider([
+        row("2024-01-02", adjOpen=50, adjHigh=62, adjLow=45, adjClose=50), row("2024-01-03", adjOpen=50, adjHigh=62, adjLow=45, adjClose=55),
+        row("2024-01-04", adjOpen=50, adjHigh=62, adjLow=45, adjClose=60),
+    ])
+    result = ingest_price_history(["AAPL"], "2024-01-04", "2024-01-04", db_path=db,
+                                  provider=after_split)
+    assert result["AAPL"]["status"] == "ok"
+    assert after_split.calls == [("AAPL", "2024-01-02", "2024-01-04")]
+    with sqlite3.connect(db) as connection:
+        assert connection.execute(
+            "SELECT date, adj_close FROM daily_prices ORDER BY date"
+        ).fetchall() == [("2024-01-02", 50), ("2024-01-03", 55), ("2024-01-04", 60)]
+        assert connection.execute(
+            "SELECT COUNT(DISTINCT retrieved_at) FROM daily_prices WHERE symbol='AAPL'"
+        ).fetchone()[0] == 1
+
+
+def test_failed_refresh_preserves_previous_complete_snapshot(tmp_path):
+    db = tmp_path / "prices.db"
+    ingest_price_history(["AAPL"], "2024-01-02", "2024-01-03", db_path=db,
+                         provider=FakeProvider([row("2024-01-02", adjOpen=100, adjHigh=112, adjLow=90, adjClose=100)]))
+    failed = FakeProvider([row("2024-01-02", adjOpen=50, adjHigh=62, adjLow=45, adjClose=50), row("2024-01-04", high=8)])
+    result = ingest_price_history(["AAPL"], "2024-01-04", "2024-01-04", db_path=db,
+                                  provider=failed)
+    assert result["AAPL"]["reason"]["code"] == "provider_error"
+    assert get_price_history("AAPL", as_of="2024-01-04", db_path=db)["data"]["latest_adjusted_close"]["value"] == 100
+
+
+def test_mixed_legacy_snapshot_is_not_read_or_used_as_cache(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "prices.db"
+    ingest_price_history(["AAPL"], "2024-01-02", "2024-01-03", db_path=db,
+                         provider=FakeProvider([row("2024-01-02"), row("2024-01-03")]))
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE daily_prices SET retrieved_at='old' WHERE date='2024-01-02'")
+    assert get_price_history("AAPL", as_of="2024-01-03", db_path=db)["status"] == "unavailable"
+    provider = FakeProvider([row("2024-01-02"), row("2024-01-03")])
+    result = ingest_price_history(["AAPL"], "2024-01-02", "2024-01-03", db_path=db,
+                                  provider=provider)
+    assert result["AAPL"]["status"] == "ok"
+    assert len(provider.calls) == 1
+
+
+def test_snapshot_rejects_row_window_metadata_mismatch(tmp_path):
+    import sqlite3
+
+    db = tmp_path / "prices.db"
+    ingest_price_history(["AAPL"], "2024-01-02", "2024-01-03", db_path=db,
+                         provider=FakeProvider([row("2024-01-02"), row("2024-01-03")]))
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE daily_prices SET window_start='2024-01-01' WHERE date='2024-01-02'")
+    result = get_price_history("AAPL", as_of="2024-01-03", db_path=db)
+    assert result["status"] == "unavailable"
+    assert result["reason"]["code"] == "provider_error"

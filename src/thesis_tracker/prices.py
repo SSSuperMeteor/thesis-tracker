@@ -92,6 +92,32 @@ def _result(status: str, as_of: str, data=None, source=None, fact_id=None, reaso
             "fact_id": fact_id, "reason": reason}
 
 
+def _snapshot(connection: sqlite3.Connection, symbol: str) -> tuple[bool, str | None, str | None, int]:
+    windows = connection.execute(
+        "SELECT start_date, end_date, retrieved_at, row_count, provider "
+        "FROM price_windows WHERE symbol=?",
+        (symbol,),
+    ).fetchall()
+    row_count, retrieval_count, retrieval = connection.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT retrieved_at), MIN(retrieved_at) "
+        "FROM daily_prices WHERE symbol=?", (symbol,),
+    ).fetchone()
+    if not windows:
+        return row_count == 0, None, None, row_count
+    mismatches = 0
+    if len(windows) == 1 and row_count:
+        mismatches = connection.execute(
+            "SELECT COUNT(*) FROM daily_prices WHERE symbol=? AND "
+            "(window_start!=? OR window_end!=? OR retrieved_at!=? OR provider!=?)",
+            (symbol, windows[0][0], windows[0][1], windows[0][2], windows[0][4]),
+        ).fetchone()[0]
+    valid = (len(windows) == 1 and windows[0][3] == row_count and mismatches == 0
+             and (row_count == 0 or (retrieval_count == 1 and retrieval == windows[0][2])))
+    start = min(item[0] for item in windows)
+    end = max(item[1] for item in windows)
+    return valid, start, end, row_count
+
+
 def _validate(rows: list[dict], start: date, end: date, today: date) -> list[dict]:
     failures = []
     validated = []
@@ -166,13 +192,10 @@ def ingest_price_history(
             if stopped:
                 outcomes[given_symbol] = _result("unavailable", end_date, reason=_reason("rate_limited", "已停止抓取，达到请求上限或提供方限流。"))
                 continue
-            covered = connection.execute(
-                "SELECT row_count FROM price_windows WHERE symbol=? AND start_date<=? AND end_date>=? LIMIT 1",
-                (symbol, start_date, end_date),
-            ).fetchone()
-            if covered is not None:
-                code = "ok" if covered[0] else "unavailable"
-                reason = None if covered[0] else _reason("no_data", "该日期窗口没有价格数据。")
+            valid, stored_start, stored_end, row_count = _snapshot(connection, symbol)
+            if valid and stored_start is not None and stored_start <= start_date and stored_end >= end_date:
+                code = "ok" if row_count else "unavailable"
+                reason = None if row_count else _reason("no_data", "该日期窗口没有价格数据。")
                 outcomes[given_symbol] = _result(code, end_date, reason=reason)
                 continue
             if requests >= max_requests:
@@ -180,11 +203,13 @@ def ingest_price_history(
                 outcomes[given_symbol] = _result("unavailable", end_date, reason=_reason("rate_limited", "本次运行已达到请求上限。"))
                 continue
             requests += 1
+            request_start = min(start_date, stored_start) if stored_start else start_date
+            request_end = max(end_date, stored_end) if stored_end else end_date
             try:
-                raw = provider.fetch(symbol, start_date, end_date)
+                raw = provider.fetch(symbol, request_start, request_end)
                 if not isinstance(raw, list):
                     raise ProviderError("response is not a list")
-                rows = _validate(raw, start, end, today)
+                rows = _validate(raw, _date(request_start), _date(request_end), today)
             except RateLimited:
                 stopped = True
                 outcomes[given_symbol] = _result("unavailable", end_date, reason=_reason("rate_limited", "Tiingo 限流，已停止后续请求。"))
@@ -194,16 +219,18 @@ def ingest_price_history(
                 continue
             retrieved = datetime.now(timezone.utc).isoformat()
             with connection:
+                connection.execute("DELETE FROM daily_prices WHERE symbol=?", (symbol,))
+                connection.execute("DELETE FROM price_windows WHERE symbol=?", (symbol,))
                 for row in rows:
-                    connection.execute("""INSERT OR REPLACE INTO daily_prices VALUES (
+                    connection.execute("""INSERT INTO daily_prices VALUES (
                         ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                         symbol, row["date"], row["open"], row["high"], row["low"], row["close"], row["volume"],
                         row.get("adjOpen"), row.get("adjHigh"), row.get("adjLow"), row.get("adjClose"),
                         row.get("adjVolume"), row.get("divCash"), row.get("splitFactor"),
-                        start_date, end_date, retrieved, "tiingo",
+                        request_start, request_end, retrieved, "tiingo",
                     ))
                 connection.execute("INSERT INTO price_windows VALUES (?,?,?,?,?,?)",
-                                   (symbol, start_date, end_date, "tiingo", retrieved, len(rows)))
+                                   (symbol, request_start, request_end, "tiingo", retrieved, len(rows)))
             status = "ok" if rows else "unavailable"
             reason = None if rows else _reason("no_data", "该日期窗口没有价格数据。")
             outcomes[given_symbol] = _result(status, end_date, reason=reason)
@@ -228,6 +255,7 @@ def get_price_history(
         connection = sqlite3.connect(f"file:{quote(str(path.resolve()))}?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
         with connection:
+            valid, _, _, _ = _snapshot(connection, symbol)
             global_latest = connection.execute(
                 "SELECT * FROM daily_prices WHERE symbol=? AND date<=? ORDER BY date DESC LIMIT 1",
                 (symbol, cutoff),
@@ -241,6 +269,9 @@ def get_price_history(
     finally:
         if "connection" in locals():
             connection.close()
+    if not valid:
+        return _result("unavailable", cutoff, reason=_reason(
+            "provider_error", "本地价格行来自多个抓取批次，复权基准不一致；需要整段重新抓取。"))
     if not rows:
         return _result("unavailable", cutoff, reason=_reason("no_data", "该日期之前没有价格数据。"))
     has_more = len(rows) > limit
