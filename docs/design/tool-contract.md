@@ -75,7 +75,7 @@
 |---|---|
 | `get_price_history` | 价格历史 |
 | `get_indicators` | 技术指标；只读 `prices.db` 中同批次复权价，按 `as_of` 计算，入口为 `thesis_tracker.agent.tools.get_indicators`，定义见 `docs/design/indicators.md` |
-| `get_fundamental_metrics` | 包装 Stage 3 |
+| `get_fundamental_metrics` | 只读本地 SEC 事实快照，按披露日过滤后调用确定性 Stage 3 八指标；入口 `thesis_tracker.agent.tools.get_fundamental_metrics`，细节见 `docs/design/fundamentals-tool.md` |
 | `search_filings` | 包装 Stage 2，带引用 |
 
 可比公司（comps）与新闻工具本轮不设计（已定，明确在范围外）。
@@ -206,35 +206,37 @@
   `returned_rows`、`next_end_date`；每行带日期、原始 OHLCV、
   复权 OHLCV、现金分红与拆股因子。价格值带 `USD/share`、
   `adjusted` 标记；成交量带 `shares`。依据：本轮工具实现与 Tiingo 日线实测。
-  其它工具的 `data` schema 仍待定。
+  财报工具的 `data` 已定于下文；其它工具的 `data` schema 仍待定。
 - **已定（2026-10-03）**：价格 `source` 为 `provider=tiingo`、
   `endpoint`（不含凭据）、最新汇总行的 `request_window.start_date/end_date`、
   返回行与汇总行覆盖的 `request_windows`、最新汇总行的 `retrieved_at`。
   依据：`price_windows` 和 `daily_prices` 入库记录。
-  指标工具的 `source` 结构仍待定。
+  财报工具的 `source` 已定于下文；其它未实现工具的结构仍待定。
 - **已定（2026-10-03）**：价格行的 `fact_id` 为
   `tiingo|<规范化 symbol>|<YYYY-MM-DD>|daily`，envelope 的 `fact_id`
   指向截至 `as_of` 的最新汇总行。依据：相同 provider、symbol、日期的日线事实
   可稳定复现，且同一日期的新抓取可更新其值。
-  指标类 `fact_id` 仍待定。财报侧已有 `FinancialFact.fact_id`
+  技术指标类 `fact_id` 仍待定。财报侧已有 `FinancialFact.fact_id`
   （`financial/models.py:186`）；但指标 observation（`metrics/financial.py:415`）
   只有 `provenance.source_fact_ids`，自身没有 `fact_id`。
 - **已定（2026-10-03）**：价格工具默认返回最新 20 行；独立的
   `full_history=True` 调用默认返回最新 100 行；任何单次调用最多 100 行，
   按日期降序选取后按升序展示。若还有更早记录，返回 `next_end_date`，
   下一次调用用 `end_date=next_end_date` 继续读取。依据：工具参数及查询限制。
-  其它工具的上限仍待定。
+  财报工具上限已定于下文；其它未实现工具的上限仍待定。
 - **已定（2026-10-03）**：价格工具的 `as_of` 精度为日期，含截止日；
   `data_end_date` 显示实际最新数据日，不替调用方判断过期。
-  其它工具及盘中价格精度仍待定。
+  财报工具精度已定于下文；其它未实现工具及盘中价格精度仍待定。
 - **已定（2026-10-03）**：首个 envelope 在 Python 中用普通 `dict` 表示，
   固定键为 `status`、`data`、`source`、`as_of`、`fact_id`、`reason`；
   `reason` 是 `code`、`message` 字典。依据：`prices._result` 和工具测试。
   其它工具是否共用更强的类型表示仍待定。
-- 财务类原因代码的映射口径：`FailureCode`（`financial/models.py:12`）有 12 个成员，
+- **已定（2026-10-03）**：财务类原因代码的映射口径：`FailureCode`（`financial/models.py:12`）有 12 个成员，
   比 `.agents/skills/failure-taxonomy/SKILL.md` 正文列出的多了 metric 级
-  `zero_denominator` 与 `missing_external_data`（`:29`、`:30`），两者如何对应
-  `reason` 待定。
+  `zero_denominator` 与 `missing_external_data`（`:29`、`:30`）。两者保留原代码进入
+  `reason.code`，归为 `unavailable`；`not_applicable` 归同名 status，
+  `invalid_context` 归 `error`，其余 FailureCode 归 `unavailable`。
+  依据：只读工具映射及失败分类测试；不更改 Stage 3 枚举。
 - Stage 2 已有的 `evidence_only` / `insufficient_evidence`（`qa/sec_qa.py:261`、`:273`）
   如何映射到 envelope 的 `status`。`citation-layers` skill 第 4 节要求这两者保持
   可区分、不得并进"已回答"；差异见第 7.2 节。
@@ -250,3 +252,20 @@
 - **已定（2026-10-03）**：单个 symbol 的复权价只允许同一次抓取的完整
   快照；窗口扩展时整段重抓并在一个事务内替换旧行。缓存命中仅限完整、
   单批次快照。依据：Tiingo 复权价会随公司行动回溯改变，本轮拆股回归测试。
+- **已定（2026-10-03）**：财报 `as_of` 精度为披露日期，含截止日，按
+  `filed_at <= as_of` 过滤 filing 及其事实；同一申报家族只在当时已公开的成员中
+  按现有“已注册事实覆盖最多、并列取最新披露/受理时间”规则选一份。
+  Q4/YTD/TTM 的每个来源也遵守截止日。依据：原始/修订、Q4 和同日受理测试。
+- **已定（2026-10-03）**：财报工具沿用普通 `dict` envelope。`data` 包含
+  `ticker`、`data_end_date`（最新 filing 披露日）、`metrics`（每指标最新一期）、
+  `rows`、`returned_rows`、`next_end_date`；每指标有名称、值、单位、定义、
+  财期、来源 accession/filed_at、来源事实编号和自身编号。默认仅给每指标最新值；
+  `full_history=True` 单页最多 100 期，用 `end_date=next_end_date` 翻页。
+  依据：工具实现、分页和行数测试。
+- **已定（2026-10-03）**：财报 `source` 为
+  `provider=sec_filing_xbrl`、本次最新值涉及的 `accessions`、快照的
+  `retrieved_at`；逐项 `source_filings` 给出 accession 与 `filed_at`。
+  财报指标 `fact_id` 为 `sec_metric|ticker|metric|period_end|` 加 SHA-256
+  前 20 个十六进制字符，哈希输入为 ticker、指标名、财期结束日、数值、
+  公式和排序后的叶子 `source_fact_ids`；envelope 的编号由最新八项
+  编号或失败代码再次哈希生成。依据：同一期修订前后的确定性编号测试。
