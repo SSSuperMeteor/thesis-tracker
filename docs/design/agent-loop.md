@@ -14,10 +14,16 @@ API base URL 只能是 `https://api.deepseek.com`；API key 首选 shell 环境�
 ## 2. 工具、基础包与目录（已定，2026-10-04）
 
 模型只看见 `get_price_history`、`get_indicators`、`get_fundamental_metrics`。
-英文工具描述列清本地数据、用途和分档历史。模型可传目标 ticker 或 SPY；
-历史须显式传 `resolution` 和 `fields`。旧 `full_history` 原始页不在模型工具 schema 中；
-若仍请求，返回可修正的 `resolution_required` 错误。工具 schema 不含 `as_of`；
-若模型仍传入，Python 返回 `as_of_forbidden` 结构化错误且不调用工具。
+英文工具描述列清本地数据、用途和分档历史。目标 ticker 可用于默认页和分档历史；
+**SPY 只可用于默认最新页**，分档历史只支持目标 ticker，schema 与系统提示词都写明这一点。
+历史须显式传 `resolution` 和 `fields`；`fields` 枚举按工具分开：`get_price_history`
+只接受 `close`/`adjusted_close`，`get_indicators` 只接受 `rsi_14`/`macd_histogram`/
+`volume_ratio_20`。schema、目录文字和 `history_view` 共用 `evidence.TOOL_HISTORY_FIELDS`
+一个来源，所以宣传的枚举不会再和分发层漂移（见第 8 节）。旧 `full_history` 原始页不在
+模型工具 schema 中；若仍请求，返回可修正的 `resolution_required` 错误，消息里列出可选
+resolution 与该工具支持的 fields。工具 schema 不含 `as_of`；若模型仍传入，Python 返回
+`as_of_forbidden` 结构化错误且不调用工具。所有工具参数错误都返回结构化错误交回模型继续，
+消息必须给出可操作提示（哪个参数、可选值是什么），不得终止整次分析。
 每次实际调用由 Python 注入本次 `as_of`。程序循环前预取三个工具的默认页，
 再按需取五年价格原始行和财务同比来源行；预取次数单独统计，不占模型的 12 次。
 默认页、价格来源页及指标所选历史行的精确值与确定性派生事实进入 `EvidenceSnapshot`；模型只收到有编号的
@@ -31,7 +37,8 @@ API base URL 只能是 `https://api.deepseek.com`；API key 首选 shell 环境�
 
 ## 3. 对话、修正与限额（已定）
 
-系统提示词版本 `decision-agent-v2-compact-2026-10-04`。模型须给明确倾向和动作，
+系统提示词版本 `decision-agent-v3-tool-contract-2026-10-04`（v2 → v3 只把
+"SPY 仅可用于默认最新页"写进提示词，未放宽任何校验规则）。模型须给明确倾向和动作，
 适用的买点、止损、目标位，至少一条可机器检查的收盘价失效条件；
 事实数字只通过 `fact_id` 和 `{fact:<id>}` 占位符表达。
 模型最终输出 JSON 草稿；Python 生成事实表、数据缺口、免责声明，再调用阶段一
@@ -129,7 +136,84 @@ DeepSeek [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/) �
 遵照“因工具返回大小失败即停止”规则，本轮不再调用 NVDA/TSLA；该修正后的
 真实 API 行为仍未验证。按第 6 节官方低峰价估算，这次约 $0.0013098。
 
-## 8. 后续待定（待定）
+## 8. 第二轮离线复核与协议修复（已定记录，2026-10-04）
 
-后续真实验证需再次从 AAPL 开始确认修正后的协议行为；本轮未取得通过的真实卡。
+### 8.1 真实 API 本节未运行（未验证）
+
+本轮 shell 环境没有 `DEEPSEEK_API_KEY`（`printenv` 为空）。按任务规定，真实 API
+验证整节跳过并标 **未验证**：AAPL → NVDA → TSLA 一次都没有真实调用，因此
+"模型改用分档请求后能否正常完成分析"仍然未知。没有产生任何真实 token 消耗。
+
+### 8.2 对上一轮二手信息的核实
+
+审计库 `data/decisions/cards.db`：
+
+- `decision_model_calls` 3 行。其中 `5d4a3ebd-…` 第 1 轮 = 输入 6,712 / 输出 505 /
+  缓存命中 0，请求名与返回名都是 `deepseek-flash`，与上一轮报告的"1 轮、6,712/505"一致。
+- `decision_tool_calls` **0 行**，`decision_attempts` **0 行**。该表由 `dfd5fff`
+  引入，而那次运行早于它。因此**旧运行没有留下工具参数记录**，"哪一次到底传了什么"
+  无法从审计复原。上一轮报告里"前 3 次 249 字节错误"的说法本身有一处不准确：它把
+  4 次调用记成"前两次价格、第三次指标"，但参数无从查证。
+- 上一轮报告中 "AAPL/NVDA 原有 57/58 个 fact_id 与精确值逐项相同" 含义已核实为：
+  **AAPL 快照共 57 个 fact_id，NVDA 共 58 个，逐项数值与基线 fixture 相同**（见 8.5）。
+
+### 8.3 249 字节错误的根因（离线复原）
+
+把当前 `_dispatch` 能产生的全部错误消息逐条算成 envelope 字节数，**只有一条恰好
+249 字节**：
+
+```
+invalid_tool_arguments: 分档历史只接受目标标的、resolution 和 fields。
+```
+
+旧代码里这一个分支同时由 5 个条件共用（`name == "get_fundamental_metrics"`、
+`symbol != ticker`、`end_date is not None`、`full_history`、`limit is not None`），
+所以前 3 次调用**都落在同一分支**，报错原因不唯一。两种最可能的触发都在当前 repo
+离线复现了：
+
+1. **SPY 分档历史**：工具 schema 的 `ticker` 描述写 "use the target or SPY"，
+   系统提示词写"可调用目标股票与 SPY"，但分发层拒绝 `SPY + resolution` ——
+   `_dispatch` 的 `symbol != ticker` 分支，返回上面那条 249 字节错误。
+2. **旧参数与 `resolution` 混用**：`limit`/`full_history`/`end_date` 已从 schema
+   删掉，模型仍可能带上，命中同一分支。旧运行第 4 次调用直接用 `full_history`
+   触发 `resolution_required`。
+
+结论：三个 249 字节错误属于同一类缺陷——**模型可见的说明/schema 宣传了分发层
+不接受的能力**。修复方向是让宣传面与分发层一致，而不是放宽分发层。
+
+### 8.4 本轮修复（只改模型可见契约与错误消息）
+
+1. `fields` 枚举按工具拆分，`history_view`、工具 schema、目录文字共用
+   `evidence.TOOL_HISTORY_FIELDS` 一个来源。
+2. schema `ticker` 描述与系统提示词写明 "SPY 只可用于默认最新页"。
+3. 目录文字由 `history_field_help()` 生成，按工具列出支持的字段。
+4. 全部工具错误消息给出可操作提示（未允许的字段名、可选 resolution、该工具支持的
+   fields、要加/要去的参数）。
+5. 系统提示词版本 `v2 → v3`，`evidence_windows` 之外不改卡片协议。
+
+**没有改动的**：`validate_card` 与全部 D 规则、卡片字段与价位规则、8 个指标、
+resolver、Stage 1/2/3、冻结基线、`full_history` 的拒绝行为（只是消息更具体）。
+`history_view` 的字段白名单数值不变，只是提取成常量。
+
+### 8.5 离线验收数字（2026-10-04）
+
+fact_id 回归（`capture_snapshot` + `fact_index`，as_of `2026-10-04`，对比基线
+fixture `tests/fixtures/decision_baseline_2026-10-04.json`）：
+
+| ticker | 改动前总数 | 改动后总数 | 相同 | 新增 | 消失 | 值变化 |
+|---|---:|---:|---:|---:|---:|---:|
+| AAPL | 57 | 57 | 57 | 0 | 0 | 0 |
+| NVDA | 58 | 58 | 58 | 0 | 0 | 0 |
+
+新增测试：`tests/test_decision_tool_contract.py`（23 项）覆盖"schema/说明/提示词
+宣传的每个参数与枚举值分发层都接受"、"错误消息可操作"、"错误不终止分析"；
+`tests/test_decision_evidence.py` 增加按 ticker 的 fact_id 增删改计数断言。
+全量 `pytest` 473 → 498 通过，`ruff` 干净，stress runner 仍 580/952 = 60.9244%，
+`eval/stage3_stress_8metric.json` sha256 仍为
+`d247434ddd8ed2086dda4a73cca51e5b7f144cf6e6d8d3a7bacfc446b3ffe237`。
+
+## 9. 后续待定（待定）
+
+后续真实验证需再次从 AAPL 开始：确认模型在 SPY/分档参数被拒后能改用目标 ticker 的
+分档请求，并跑完一轮出卡。本轮没有取得通过的真实卡，也没有真实 token 消耗。
 到期评估与文本检索仍不在本轮实现范围。
