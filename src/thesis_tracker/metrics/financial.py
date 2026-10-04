@@ -130,9 +130,14 @@ def compute_gross_margin_trend(
     issuer_sic: str | None = None,
     ai_fallback: AiFallback | None = None,
     semantic_contexts: tuple[FilingSemanticContext, ...] = (),
+    as_of: date | None = None,
 ) -> GrossMarginTrend:
     """Compute up to eight proven single-quarter gross-margin observations."""
 
+    facts, boundaries = _as_of_inputs(facts, boundaries, as_of)
+    if as_of is not None:
+        semantic_contexts = tuple(item for item in semantic_contexts
+                                  if item.boundary.filed_at <= as_of)
     observations: list[GrossMarginObservation] = []
     failures: list[FailureDiagnostic] = []
     ai_attempts: list[AiConceptAttempt] = []
@@ -460,6 +465,19 @@ def _ordered_targets(
     return tuple(ordered[: max(0, max_periods)])
 
 
+def _as_of_inputs(
+    facts: tuple[FinancialFact, ...],
+    boundaries: tuple[FilingBoundary, ...],
+    as_of: date | None,
+) -> tuple[tuple[FinancialFact, ...], tuple[FilingBoundary, ...]]:
+    if as_of is None:
+        return facts, boundaries
+    visible = tuple(item for item in boundaries if item.filed_at <= as_of)
+    accessions = {item.accession for item in visible}
+    return (tuple(item for item in facts if item.filed_at <= as_of and
+                  item.accession in accessions), visible)
+
+
 def _year_ago_boundary(
     boundaries: tuple[FilingBoundary, ...], target: FilingBoundary
 ) -> FilingBoundary | None:
@@ -632,9 +650,11 @@ def compute_cash_conversion(
     boundaries: tuple[FilingBoundary, ...],
     max_periods: int = 8,
     issuer_sic: str | None = None,
+    as_of: date | None = None,
 ) -> MetricResult:
     """cash_conversion = operating_cash_flow / net_income (Decimal, signed)."""
 
+    facts, boundaries = _as_of_inputs(facts, boundaries, as_of)
     del issuer_sic  # cash conversion is meaningful for every issuer type
 
     metric = "cash_conversion"
@@ -678,9 +698,11 @@ def compute_accruals_ratio(
     boundaries: tuple[FilingBoundary, ...],
     max_periods: int = 8,
     issuer_sic: str | None = None,
+    as_of: date | None = None,
 ) -> MetricResult:
     """accruals_ratio = (net_income - operating_cash_flow) / average total assets."""
 
+    facts, boundaries = _as_of_inputs(facts, boundaries, as_of)
     del issuer_sic  # accruals are meaningful for every issuer type
     metric = "accruals_ratio"
     formula = (
@@ -747,9 +769,11 @@ def compute_ar_growth_vs_rev_growth(
     boundaries: tuple[FilingBoundary, ...],
     max_periods: int = 8,
     issuer_sic: str | None = None,
+    as_of: date | None = None,
 ) -> MetricResult:
     """AR YoY growth minus revenue YoY growth for comparable fiscal quarters."""
 
+    facts, boundaries = _as_of_inputs(facts, boundaries, as_of)
     metric = "ar_growth_vs_rev_growth"
     formula = "accounts_receivable_yoy - revenue_yoy"
     inapplicable = _issuer_inapplicable(
@@ -823,9 +847,13 @@ def compute_net_buyback_yield(
     max_periods: int = 8,
     market_cap: MarketCapInput | None = None,
     issuer_sic: str | None = None,
+    as_of: date | None = None,
 ) -> MetricResult:
     """net_buyback_yield = (share_repurchases - SBC) / historical market cap."""
 
+    facts, boundaries = _as_of_inputs(facts, boundaries, as_of)
+    if as_of is not None:
+        market_cap = None
     del issuer_sic  # capital returns are meaningful for every issuer type
     metric = "net_buyback_yield"
     formula = "(share_repurchases - stock_based_compensation) / market_cap"
@@ -898,9 +926,11 @@ def compute_diluted_share_count_yoy(
     boundaries: tuple[FilingBoundary, ...],
     max_periods: int = 8,
     issuer_sic: str | None = None,
+    as_of: date | None = None,
 ) -> MetricResult:
     """YoY change in diluted weighted-average shares (not period-end shares)."""
 
+    facts, boundaries = _as_of_inputs(facts, boundaries, as_of)
     del issuer_sic  # dilution is meaningful for every issuer type
     metric = "diluted_share_count_yoy"
     concept = "diluted_weighted_average_shares"
@@ -960,9 +990,11 @@ def compute_interest_coverage(
     boundaries: tuple[FilingBoundary, ...],
     max_periods: int = 8,
     issuer_sic: str | None = None,
+    as_of: date | None = None,
 ) -> MetricResult:
     """interest_coverage = operating_income / abs(interest_expense)."""
 
+    facts, boundaries = _as_of_inputs(facts, boundaries, as_of)
     metric = "interest_coverage"
     formula = "operating_income / abs(interest_expense)"
     inapplicable = _issuer_inapplicable(
@@ -1010,6 +1042,7 @@ def compute_net_debt_to_ebitda(
     boundaries: tuple[FilingBoundary, ...],
     max_periods: int = 8,
     issuer_sic: str | None = None,
+    as_of: date | None = None,
 ) -> MetricResult:
     """net_debt_to_ebitda = (total_debt - cash) / GAAP EBITDA.
 
@@ -1019,6 +1052,7 @@ def compute_net_debt_to_ebitda(
     aggregate.
     """
 
+    facts, boundaries = _as_of_inputs(facts, boundaries, as_of)
     metric = "net_debt_to_ebitda"
     inapplicable = _issuer_inapplicable(
         metric=metric, ticker=ticker, boundaries=boundaries, issuer_sic=issuer_sic
