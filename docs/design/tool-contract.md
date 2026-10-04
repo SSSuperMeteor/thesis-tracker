@@ -196,16 +196,38 @@
 
 ---
 
-## 8. 待定（开放问题，本轮不决定）
+## 8. 待定与本轮已定项
 
-- 各工具 `data` 的具体字段 schema。
-- `source` 在价格/指标工具里的具体结构（"接口 + 时间窗口"如何编码）。
-- 价格/指标类 `fact_id` 的生成方式。财报侧已有 `FinancialFact.fact_id`
+- **已定（2026-10-03）**：`get_price_history` 的 `data` 为 `symbol`、
+  `data_end_date`、`latest_close`、`latest_adjusted_close`、`rows`、
+  `returned_rows`、`next_end_date`；每行带日期、原始 OHLCV、
+  复权 OHLCV、现金分红与拆股因子。价格值带 `USD/share`、
+  `adjusted` 标记；成交量带 `shares`。依据：本轮工具实现与 Tiingo 日线实测。
+  其它工具的 `data` schema 仍待定。
+- **已定（2026-10-03）**：价格 `source` 为 `provider=tiingo`、
+  `endpoint`（不含凭据）、最新汇总行的 `request_window.start_date/end_date`、
+  返回行与汇总行覆盖的 `request_windows`、最新汇总行的 `retrieved_at`。
+  依据：`price_windows` 和 `daily_prices` 入库记录。
+  指标工具的 `source` 结构仍待定。
+- **已定（2026-10-03）**：价格行的 `fact_id` 为
+  `tiingo|<规范化 symbol>|<YYYY-MM-DD>|daily`，envelope 的 `fact_id`
+  指向截至 `as_of` 的最新汇总行。依据：相同 provider、symbol、日期的日线事实
+  可稳定复现，且同一日期的新抓取可更新其值。
+  指标类 `fact_id` 仍待定。财报侧已有 `FinancialFact.fact_id`
   （`financial/models.py:186`）；但指标 observation（`metrics/financial.py:415`）
   只有 `provenance.source_fact_ids`，自身没有 `fact_id`。
-- "单次返回量要有上限"的具体数值与截断策略。
-- `as_of` 的精度（只到日期，还是含时间戳，例如盘中价格）。
-- envelope 在代码里的表示形式（`TypedDict` / dataclass / JSON Schema）。
+- **已定（2026-10-03）**：价格工具默认返回最新 20 行；独立的
+  `full_history=True` 调用默认返回最新 100 行；任何单次调用最多 100 行，
+  按日期降序选取后按升序展示。若还有更早记录，返回 `next_end_date`，
+  下一次调用用 `end_date=next_end_date` 继续读取。依据：工具参数及查询限制。
+  其它工具的上限仍待定。
+- **已定（2026-10-03）**：价格工具的 `as_of` 精度为日期，含截止日；
+  `data_end_date` 显示实际最新数据日，不替调用方判断过期。
+  其它工具及盘中价格精度仍待定。
+- **已定（2026-10-03）**：首个 envelope 在 Python 中用普通 `dict` 表示，
+  固定键为 `status`、`data`、`source`、`as_of`、`fact_id`、`reason`；
+  `reason` 是 `code`、`message` 字典。依据：`prices._result` 和工具测试。
+  其它工具是否共用更强的类型表示仍待定。
 - 财务类原因代码的映射口径：`FailureCode`（`financial/models.py:12`）有 12 个成员，
   比 `.agents/skills/failure-taxonomy/SKILL.md` 正文列出的多了 metric 级
   `zero_denominator` 与 `missing_external_data`（`:29`、`:30`），两者如何对应
@@ -213,4 +235,7 @@
 - Stage 2 已有的 `evidence_only` / `insufficient_evidence`（`qa/sec_qa.py:261`、`:273`）
   如何映射到 envelope 的 `status`。`citation-layers` skill 第 4 节要求这两者保持
   可区分、不得并进"已回答"；差异见第 7.2 节。
-- 价格数据的来源与落库位置（与 `docs/design/decision-mode.md` 的存储待定是同一问题）。
+- **已定（2026-10-03）**：日线价格来源为 Tiingo
+  `/tiingo/daily/<ticker>/prices`，存入 `data/cache/prices.db` 的独立 SQLite
+  表，建表即用。依据：Tiingo 官方日线文档、本轮三标的实测及现有
+  `.gitignore` 对 `data/cache/` 的忽略。Decision Mode 建议卡的存储位置仍待定。
