@@ -81,3 +81,16 @@ discovery 层能不能拿到一个经过验证的真实 regression case。
 - 一组 failure 是否属于同一 root cause
 - 某个 metric 对某个行业是否 `not_applicable`
 - 何时应该停下来报告而不是继续修
+
+## Decision Mode validator（设计已定，代码未强制）
+
+`docs/design/decision-mode.md` 第 5 节规定"校验失败不出卡"。以下 5 条目前没有任何
+代码强制，属"违反就报错"的机械约束，应下沉进 Decision Mode 的 Python validator：
+
+| 约束 | 实现方式 |
+|---|---|
+| 标为事实的数字与对应 `fact_id` 的工具返回值不一致 | 出卡前用 `fact_id` 回查工具 envelope 的 `data`，逐值比对；不一致即拒绝出卡 |
+| 价格数据不可用 | 出卡前检查价格类工具 envelope 的 `status`；非 `ok` 即拒绝出卡 |
+| 价位不自洽（例如做多时止损高于买点） | validator 对价位做机械不等式检查；不满足即拒绝出卡 |
+| 缺少数据缺口披露 | 卡必须带数据缺口字段；缺字段即拒绝出卡 |
+| 缺少失效条件 | 卡必须带非空失效条件；缺字段即拒绝出卡 |

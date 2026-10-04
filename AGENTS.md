@@ -2,6 +2,9 @@
 
 SEC/XBRL 财报研究 Agent。主要工作在 Stage 3（financial facts + metrics），
 Stage 1 (SEC ingestion) 与 Stage 2 (hybrid retrieval + QA + citation) 已实现。
+基本面层仍不给交易建议（买入/卖出/仓位/目标价）；交易建议只由另设的 Decision Mode
+产生，其边界、建议卡结构与 validator 约束见 `docs/design/decision-mode.md`，
+工具接口约定见 `docs/design/tool-contract.md`。
 
 Stage 1/2 的既有 correctness 行为默认保持兼容。除非本轮任务明确要求修改对应
 Stage，否则不要顺手重构；但任务明确要求时，正常修改，不要因为"已实现"而拒绝。
