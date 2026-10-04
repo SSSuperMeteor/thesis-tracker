@@ -58,14 +58,14 @@ def codes(card, snapshot):
     return {item["rule"] for item in validate_card(card, snapshot)}
 
 
-def test_valid_card_fills_only_snapshot_facts_and_renders_exact_values(card, snapshot):
+def test_valid_card_fills_exact_snapshot_facts_and_renders_display_values(card, snapshot):
     assert validate_card(card, snapshot) == []
     assert card["creation_price"] == 333.69
     assert card["disclaimer"] == DISCLAIMER
     assert card["confidence_calibration"] == "未校准"
     for fact in card["facts"]:
         assert fact["value"] == snapshot["fact_index"][fact["fact_id"]]["value"]
-        assert str(fact["value"]) in render_card(card, snapshot)
+        assert str(fact["display"]) in render_card(card, snapshot)
 
 
 @pytest.mark.parametrize(("mutation", "rule"), [

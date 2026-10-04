@@ -8,7 +8,7 @@ import sqlite3
 
 import pytest
 
-from thesis_tracker.decision.agent import DeepSeekClient, run_analysis
+from thesis_tracker.decision.agent import DeepSeekClient, _parse_draft, run_analysis
 from thesis_tracker.decision.analyze_cli import main as analyze_main
 from thesis_tracker.decision.core import capture_snapshot, read_card
 
@@ -79,10 +79,16 @@ def test_normal_tool_loop_archives_valid_card_and_echoes_reasoning(legal_draft, 
     assert result["stats"]["rounds"] == 2 and result["stats"]["tool_calls"] == 3
     assert result["stats"]["tools"] == [
         "get_price_history", "get_indicators", "get_fundamental_metrics"]
-    assert len(result["snapshot"]["calls"]) == 3
+    assert len(result["snapshot"]["calls"]) == result["stats"]["prefetch_calls"] + 3
+    assert [item["resolution"] for item in result["card"]["evidence_windows"]] == [
+        "latest_and_landmarks", "latest", "latest", "latest"]
     assert "reasoning_content" in client.requests[1]["messages"][-4]
     assert [tool["function"]["name"] for tool in client.requests[0]["tools"]] == [
         "get_price_history", "get_indicators", "get_fundamental_metrics"]
+    assert all("full_history" not in tool["function"]["parameters"]["properties"]
+               and "limit" not in tool["function"]["parameters"]["properties"]
+               and "end_date" not in tool["function"]["parameters"]["properties"]
+               for tool in client.requests[0]["tools"])
     saved = read_card(path, result["card_id"])
     assert saved["requested_model"] == "deepseek-flash"
     assert saved["returned_model"] == "deepseek-flash"
@@ -100,7 +106,7 @@ def test_model_as_of_is_rejected_and_never_reaches_tool(legal_draft, offline, tm
     client = ScriptedClient([tool_reply(call(args={"ticker": "AAPL", "as_of": "2020-01-01"})),
                              tool_reply(call()), final_reply(legal_draft)])
     result = run_analysis("AAPL", "2026-10-04", client=client, archive_path=tmp_path / "a.db")
-    assert result["status"] == "rejected"
+    assert result["status"] == "passed"
     assert result["stats"]["tool_calls"] == 2
     assert all(item["args"]["as_of"] == "2026-10-04" for item in result["snapshot"]["calls"])
     assert "as_of" in client.requests[1]["messages"][-1]["content"]
@@ -109,7 +115,7 @@ def test_model_as_of_is_rejected_and_never_reaches_tool(legal_draft, offline, tm
 @pytest.mark.parametrize(("replies", "reason"), [
     ([tool_reply(*[call(call_id=f"c{i}") for i in range(13)])], "tool_limit"),
     ([tool_reply() for _ in range(16)], "round_limit"),
-    ([{"usage": {"prompt_tokens": 60000, "completion_tokens": 1,
+    ([{"usage": {"prompt_tokens": 1_500_000, "completion_tokens": 1,
                  "prompt_cache_hit_tokens": 0}, **final_reply({})}], "token_limit"),
 ])
 def test_hard_limits_reject_without_card(replies, reason, offline, tmp_path):
@@ -156,10 +162,12 @@ def test_bad_tool_name_or_arguments_return_structured_errors(legal_draft, offlin
                              final_reply(legal_draft)])
     result = run_analysis("AAPL", "2026-10-04", client=client,
                           archive_path=tmp_path / "cards.db")
-    assert result["status"] == "rejected"
+    assert result["status"] == "passed"
     tool_messages = [item for item in client.requests[1]["messages"] if item["role"] == "tool"]
     assert len(tool_messages) == 2
     assert all(json.loads(item["content"])["status"] == "error" for item in tool_messages)
+    with sqlite3.connect(tmp_path / "cards.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM decision_tool_calls").fetchone()[0] == 2
 
 
 def test_attempt_table_is_immutable_and_secret_never_persisted_or_printed(
@@ -170,7 +178,7 @@ def test_attempt_table_is_immutable_and_secret_never_persisted_or_printed(
     client = ScriptedClient([tool_reply(call()), final_reply(legal_draft)])
     path = tmp_path / "cards.db"
     result = run_analysis("AAPL", "2026-10-04", client=client, archive_path=path)
-    assert result["status"] == "rejected"  # indicator fact was not captured
+    assert result["status"] == "passed"  # the indicator fact is now in the prefetched base pack
     with sqlite3.connect(path) as conn:
         row = conn.execute("SELECT attempt_id FROM decision_attempts LIMIT 1").fetchone()
         with pytest.raises(sqlite3.DatabaseError, match="immutable"):
@@ -191,6 +199,9 @@ def test_analyze_command_prints_validated_chinese_card(legal_draft, offline, tmp
     output = capsys.readouterr().out
     assert "AI 判断" in output and "数据缺口" in output
     assert "工具调用 2 次" in output
+    assert "基础包字节" in output
+    assert "逐轮 token" in output
+    assert "逐次工具字节" in output
 
 
 def test_api_key_is_never_sent_to_a_non_deepseek_host(monkeypatch, offline):
@@ -200,14 +211,19 @@ def test_api_key_is_never_sent_to_a_non_deepseek_host(monkeypatch, offline):
         DeepSeekClient()
 
 
-def test_large_tool_envelope_is_blocked_before_next_model_request(offline, tmp_path):
+def test_legacy_full_history_gets_resolution_error_and_can_recover(legal_draft, offline, tmp_path):
     client = ScriptedClient([tool_reply(call("get_indicators", args={
-        "ticker": "AAPL", "full_history": True}, call_id="history"))])
+        "ticker": "AAPL", "full_history": True}, call_id="history")),
+                             tool_reply(call("get_indicators", args={
+                                 "ticker": "AAPL", "resolution": "weekly_3m",
+                                 "fields": ["rsi_14"]}, call_id="tiered")),
+                             final_reply(legal_draft)])
     result = run_analysis("AAPL", "2026-10-04", client=client,
                           archive_path=tmp_path / "cards.db")
-    assert result["status"] == "rejected" and result["reason"] == "token_limit"
-    assert result["stats"]["rounds"] == 1
-    assert len(client.requests) == 1
+    assert result["status"] == "passed"
+    assert result["stats"]["rounds"] == 3
+    assert json.loads(client.requests[1]["messages"][-1]["content"])["reason"]["code"] == "resolution_required"
+    assert len(client.requests) == 3
 
 
 def test_real_client_disables_hidden_http_retries(monkeypatch, offline):
@@ -224,3 +240,72 @@ def test_real_client_disables_hidden_http_retries(monkeypatch, offline):
     monkeypatch.setattr(openai, "OpenAI", fake_openai)
     DeepSeekClient()
     assert configured["max_retries"] == 0
+
+
+def test_prefetched_base_and_catalog_are_in_first_request(legal_draft, offline, tmp_path):
+    client = ScriptedClient([final_reply(legal_draft)])
+    result = run_analysis("AAPL", "2026-10-04", client=client,
+                          archive_path=tmp_path / "base.db")
+    assert result["status"] == "passed"
+    assert result["stats"]["prefetch_calls"] > 3
+    assert result["stats"]["tool_calls"] == 0
+    first = client.requests[0]["messages"]
+    assert "catalog" in first[1]["content"]
+    assert "base_pack" in first[1]["content"]
+    assert result["card"]["evidence_windows"] == result["snapshot"]["evidence_windows"]
+
+
+def test_history_resolution_is_compact_and_recorded(legal_draft, offline, tmp_path):
+    client = ScriptedClient([tool_reply(call("get_price_history", {
+        "ticker": "AAPL", "resolution": "weekly_3m", "fields": ["close", "adjusted_close"]})),
+                             final_reply(legal_draft)])
+    result = run_analysis("AAPL", "2026-10-04", client=client,
+                          archive_path=tmp_path / "history.db")
+    assert result["status"] == "passed"
+    payload = json.loads(client.requests[1]["messages"][-1]["content"])
+    assert payload["data"]["resolution"] == "weekly_3m"
+    assert 1 <= len(payload["data"]["rows"]) <= 15
+    assert len(json.dumps(payload, ensure_ascii=False).encode()) <= 32768
+    assert result["card"]["evidence_windows"][1]["resolution"] == "weekly_3m"
+    assert read_card(tmp_path / "history.db", result["card_id"])["card"]["evidence_windows"] == result["card"]["evidence_windows"]
+
+
+def test_soft_limit_prevents_new_tools_and_hard_limit_rejects(offline, tmp_path):
+    huge = {"usage": {"prompt_tokens": 1_000_000, "completion_tokens": 1,
+                      "prompt_cache_hit_tokens": 0}}
+    client = ScriptedClient([{**huge, **tool_reply(call())}])
+    result = run_analysis("AAPL", "2026-10-04", client=client,
+                          archive_path=tmp_path / "soft.db")
+    assert result["status"] == "rejected" and result["reason"] == "token_soft_limit"
+    assert result["stats"]["tool_calls"] == 0
+    assert len(client.requests) == 1
+    over = {"usage": {"prompt_tokens": 1_500_001, "completion_tokens": 1,
+                      "prompt_cache_hit_tokens": 0}}
+    result = run_analysis("AAPL", "2026-10-04", client=ScriptedClient([{**over, **final_reply({})}]),
+                          archive_path=tmp_path / "hard.db")
+    assert result["status"] == "rejected" and result["reason"] == "token_limit"
+
+
+def test_soft_limit_still_allows_json_correction(legal_draft, offline, tmp_path):
+    first = {"usage": {"prompt_tokens": 1_000_001, "completion_tokens": 1,
+                       "prompt_cache_hit_tokens": 0}, **final_reply({})}
+    client = ScriptedClient([first, final_reply(legal_draft)])
+    result = run_analysis("AAPL", "2026-10-04", client=client,
+                          archive_path=tmp_path / "soft_correction.db")
+    assert result["status"] == "passed" and result["stats"]["revisions"] == 1
+    assert client.requests[1]["tools"] == []
+
+
+def test_input_estimate_blocks_request_before_network(offline, tmp_path, monkeypatch):
+    monkeypatch.setattr("thesis_tracker.decision.agent.MAX_REQUEST_INPUT_TOKENS", 100)
+    client = ScriptedClient([])
+    result = run_analysis("AAPL", "2026-10-04", client=client,
+                          archive_path=tmp_path / "gate.db")
+    assert result["status"] == "rejected" and result["reason"] == "request_input_limit"
+    assert client.requests == []
+
+
+def test_model_cannot_supply_evidence_windows(legal_draft):
+    draft, errors = _parse_draft(json.dumps(dict(legal_draft, evidence_windows=[])))
+    assert draft is None
+    assert any(item["rule"] == "D00" and item["location"] == "evidence_windows" for item in errors)

@@ -20,18 +20,27 @@ from thesis_tracker.decision.core import (
     render_card,
     validate_card,
 )
+from thesis_tracker.decision.evidence import (
+    HISTORY_FIELDS,
+    RESOLUTIONS,
+    compact_tool_response,
+    history_view,
+    prepare_evidence,
+)
 from thesis_tracker.financial.tool import get_fundamental_metrics
 from thesis_tracker.indicator_tool import get_indicators
 from thesis_tracker.prices import get_price_history
 
 MODEL = "deepseek-flash"
-PROMPT_VERSION = "decision-agent-v1-2026-10-04"
+PROMPT_VERSION = "decision-agent-v2-compact-2026-10-04"
 MAX_TOOL_CALLS = 12
 MAX_ROUNDS = 16
-MAX_TOTAL_TOKENS = 60_000
+MAX_TOTAL_TOKENS = 1_500_000
+SOFT_TOTAL_TOKENS = 1_000_000
+MAX_REQUEST_INPUT_TOKENS = 200_000
 MAX_REVISIONS = 2
 
-SYSTEM_PROMPT = """你是 Decision Mode 研究判断模型。只使用三个本地工具的原始返回作为事实。
+SYSTEM_PROMPT = """你是 Decision Mode 研究判断模型。只使用基础包或工具返回中有 fact_id 的事实。
 你的立场必须明确：给出看多/中性/看空、买入/分批/持有/减仓/回避、具体买点、止损和目标。
 减仓或回避时这些多头价位字段填 null，明确给出收盘价突破或跌破的失效阈值。
 事实数值只能来自工具。JSON 草稿只列 fact_id，不写事实表、数据缺口或免责声明；
@@ -40,33 +49,36 @@ Python 会按 fact_id 填值。理由和失效条件文字引用事实数字只�
 每条理由至少列一个 fact_id。必须有 kind=close_below 或 close_above 且 price>0 的失效条件。
 不要隐瞒 unavailable、not_applicable 或 null；Python 自动把它们写进数据缺口。
 工具 as_of 由程序固定，永远不要在工具参数中传 as_of。可调用目标股票与 SPY。
+基础包已提供最新值和关键地标；历史按 resolution 与 fields 请求，只引用所见 fact_id。
+先选周期：短期优先 weekly_3m，中期优先 monthly_2y，长期优先 quarterly_5y；可按需加档。
 只输出一个 JSON 对象，不要 markdown。schema 示例：
-{"ticker":"AAPL","as_of":"2026-10-04","horizon":"中期","bias":"看多", 
-"action":"买入","confidence":"中","entry_range":[100,110],"stop_loss":90,
-"target_price":130,"fact_ids":["真实编号"],"reasons":[{"text":"观察 {fact:真实编号}",
-"fact_ids":["真实编号"]}],"invalidations":[{"kind":"close_below","price":90,
+{"ticker":"目标标的","as_of":"分析日期","horizon":"中期","bias":"看多",
+"action":"买入","confidence":"中","entry_range":null,"stop_loss":null,
+"target_price":null,"fact_ids":["真实编号"],"reasons":[{"text":"观察 {fact:真实编号}",
+"fact_ids":["真实编号"]}],"invalidations":[{"kind":"close_below","price":null,
 "text":"收盘价跌破止损位"}]}。
 周期只能短期/中期/长期；置信度只能低/中/高，不写百分比。
 价格必须符合动作的确定性规则；请先读取工具结果再判断。"""
 
 
-def _tool_schema(name: str, description: str) -> dict:
+def _tool_schema(name: str, description: str, *, history: bool = True) -> dict:
+    properties = {"ticker": {"type": "string", "description": "Ticker symbol to inspect; use the target or SPY."}}
+    if history:
+        properties.update({
+            "resolution": {"type": "string", "enum": list(RESOLUTIONS),
+                           "description": "Tiered history window; required for historical series."},
+            "fields": {"type": "array", "items": {"type": "string", "enum": list(HISTORY_FIELDS)},
+                       "maxItems": 5, "description": "Only requested core historical fields."},
+        })
     return {"type": "function", "function": {"name": name, "description": description,
             "parameters": {"type": "object", "additionalProperties": False,
-                           "properties": {
-                               "ticker": {"type": "string", "description": "Ticker symbol to inspect; use the target or SPY."},
-                               "limit": {"type": "integer", "minimum": 1, "maximum": 100,
-                                         "description": "Maximum rows on a page, 1 to 100."},
-                               "full_history": {"type": "boolean", "description": "Return a history page instead of latest only."},
-                               "end_date": {"type": "string", "format": "date",
-                                            "description": "Optional last date on a history page, YYYY-MM-DD."},
-                           }, "required": ["ticker"]}}}
+                           "properties": properties, "required": ["ticker"]}}}
 
 
 TOOL_SCHEMAS = [
-    _tool_schema("get_price_history", "Read local daily prices and original closing price. Use for the target or SPY."),
-    _tool_schema("get_indicators", "Read local adjusted technical indicators, including RSI and moving averages."),
-    _tool_schema("get_fundamental_metrics", "Read eight local point-in-time SEC financial metrics and their unavailable reasons."),
+    _tool_schema("get_price_history", "Read local latest price or tiered price history with resolution and fields."),
+    _tool_schema("get_indicators", "Read local latest adjusted indicators or tiered core indicator history."),
+    _tool_schema("get_fundamental_metrics", "Read eight local point-in-time SEC financial metrics and their unavailable reasons.", history=False),
 ]
 
 _TOOLS = {"get_price_history": get_price_history, "get_indicators": get_indicators,
@@ -175,7 +187,7 @@ def _parse_draft(raw: str) -> tuple[dict | None, list[dict]]:
     if not isinstance(draft, dict):
         return None, [_error("D00", "model_output", "模型输出必须是 JSON 对象。")]
     errors = []
-    forbidden = {"facts", "gaps", "disclaimer", "confidence_calibration", "creation_price"}
+    forbidden = {"facts", "gaps", "disclaimer", "confidence_calibration", "creation_price", "evidence_windows"}
     for key in forbidden & draft.keys():
         errors.append(_error("D00", key, "这个字段由 Python 填写，模型不能提供。"))
     for key in ("ticker", "as_of", "horizon", "bias", "action", "confidence"):
@@ -207,10 +219,12 @@ def _parse_draft(raw: str) -> tuple[dict | None, list[dict]]:
 
 def _tool_error(code: str, message: str) -> dict:
     return {"status": "error", "data": None, "source": None, "as_of": None,
-            "fact_id": None, "reason": {"code": code, "message": message}}
+            "fact_id": None, "reason": {"code": code, "message": message},
+            "truncated": False, "truncation_reason": None}
 
 
-def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str) -> tuple[dict | None, dict | None]:
+def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str,
+              snapshot: dict) -> tuple[dict | None, dict | None]:
     if name not in _TOOLS:
         return None, _tool_error("unknown_tool", "只允许三个已列出的本地数据工具。")
     try:
@@ -221,7 +235,7 @@ def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str) -> tuple[d
         return None, _tool_error("invalid_tool_arguments", "工具参数必须是 JSON 对象。")
     if "as_of" in given:
         return None, _tool_error("as_of_forbidden", "as_of 由程序固定，工具参数中不能指定。")
-    if set(given) - {"ticker", "limit", "full_history", "end_date"}:
+    if set(given) - {"ticker", "limit", "full_history", "end_date", "resolution", "fields"}:
         return None, _tool_error("invalid_tool_arguments", "工具参数含未允许的字段。")
     symbol = given.get("ticker")
     if not isinstance(symbol, str) or symbol.upper() not in {ticker, "SPY"}:
@@ -240,6 +254,26 @@ def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str) -> tuple[d
                 raise ValueError
         except ValueError:
             return None, _tool_error("invalid_tool_arguments", "end_date 必须是不晚于 as_of 的日期。")
+    resolution = given.get("resolution")
+    fields = given.get("fields")
+    if resolution is None and fields is not None:
+        return None, _tool_error("invalid_tool_arguments", "fields 需要同时指定 resolution。")
+    if resolution is not None:
+        if name == "get_fundamental_metrics" or symbol != ticker or end_date is not None or full_history or limit is not None:
+            return None, _tool_error("invalid_tool_arguments", "分档历史只接受目标标的、resolution 和 fields。")
+        if not isinstance(resolution, str) or resolution not in RESOLUTIONS or not isinstance(fields, list) or (
+            not fields or not all(isinstance(item, str) for item in fields)
+        ):
+            return None, _tool_error("invalid_tool_arguments", "resolution 或 fields 无效。")
+        try:
+            envelope = history_view(snapshot, name, resolution, fields)
+        except ValueError:
+            return None, _tool_error("invalid_tool_arguments", "该工具不支持指定的历史字段。")
+        return {"tool": name, "args": {"ticker": symbol, "as_of": as_of,
+                "resolution": resolution, "fields": fields}, "envelope": envelope,
+                "model_envelope": envelope, "view_only": True}, None
+    if full_history:
+        return None, _tool_error("resolution_required", "原始历史页不供模型读取；请指定 resolution 和 fields 请求分档历史。")
     key = "ticker" if name == "get_fundamental_metrics" else "symbol"
     args = {key: symbol, "as_of": as_of, "limit": limit,
             "full_history": full_history, "end_date": end_date}
@@ -248,7 +282,12 @@ def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str) -> tuple[d
                                 full_history=full_history, end_date=end_date)
     except (TypeError, ValueError, sqlite3.Error) as exc:
         return None, _tool_error("tool_failed", f"本地工具无法完成调用（{type(exc).__name__}）。")
-    return {"tool": name, "args": args, "envelope": envelope}, None
+    record = {"tool": name, "args": args, "envelope": envelope}
+    try:
+        record["model_envelope"] = compact_tool_response(record)
+    except ValueError:
+        return None, _tool_error("envelope_limit", "工具证据超过字节上限，请缩小请求。")
+    return record, None
 
 
 def run_analysis(ticker: str, as_of: str, *, client: Any,
@@ -259,11 +298,15 @@ def run_analysis(ticker: str, as_of: str, *, client: Any,
         raise ValueError("invalid ticker")
     date.fromisoformat(as_of)
     analysis_id = str(uuid.uuid4())
-    snapshot = {"ticker": ticker, "as_of": as_of, "calls": []}
+    snapshot, base, catalog = prepare_evidence(ticker, as_of)
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": f"分析 {ticker}，as_of={as_of}。先调用工具，再输出 JSON 建议卡。"}]
+                            {"role": "user", "content": json.dumps({"task": f"分析 {ticker}，as_of={as_of}。按需取历史，然后输出 JSON 建议卡。",
+                                "base_pack": base, "catalog": catalog}, ensure_ascii=False)}]
     stats = {"rounds": 0, "tool_calls": 0, "revisions": 0, "input_tokens": 0,
-             "output_tokens": 0, "cache_hit_tokens": 0, "model_calls": [], "tools": []}
+             "output_tokens": 0, "cache_hit_tokens": 0, "model_calls": [], "tools": [],
+             "tool_details": [], "prefetch_calls": len(snapshot["calls"]),
+             "base_pack_bytes": len(json.dumps(base, ensure_ascii=False).encode()),
+             "catalog_bytes": len(catalog.encode()), "gate_reason": None}
     last_violations: list[dict] = []
     _audit_connection(archive_path).close()
 
@@ -272,20 +315,28 @@ def run_analysis(ticker: str, as_of: str, *, client: Any,
                 "card": None, "card_id": None, "rendered": None, "snapshot": snapshot,
                 "stats": stats, "analysis_id": analysis_id}
 
+    if base.get("truncated"):
+        return reject("base_envelope_limit", [_error("L03", "base_pack", base["truncation_reason"])])
+
     while stats["rounds"] < MAX_ROUNDS:
         remaining = MAX_TOTAL_TOKENS - stats["input_tokens"] - stats["output_tokens"]
         if remaining <= 0:
-            return reject("token_limit", [_error("L03", "tokens", "累计 token 达到 60000。")])
+            return reject("token_limit", [_error("L03", "tokens", "累计 token 达到硬上限。")])
         # A UTF-8 byte is a conservative upper bound for one text token;
         # reserve extra space for chat framing before sending a request.
         outbound_bytes = len(json.dumps({"messages": messages, "tools": TOOL_SCHEMAS},
                                         ensure_ascii=False).encode("utf-8"))
         estimated_input = outbound_bytes + 2048
+        if estimated_input > MAX_REQUEST_INPUT_TOKENS:
+            stats["gate_reason"] = "estimated_request_input_over_200k"
+            return reject("request_input_limit", [_error("L03", "messages", "本轮预估输入超过单请求上限；未发送请求。")])
         if estimated_input >= remaining:
-            return reject("token_limit", [_error("L03", "messages", "工具结果使下一轮输入超过 token 预算；未发送请求。")])
+            stats["gate_reason"] = "estimated_total_over_1_5m"
+            return reject("token_limit", [_error("L03", "messages", "本轮预估输入超过累计硬上限；未发送请求。")])
         stats["rounds"] += 1
         try:
-            response = client.complete(messages=messages, tools=TOOL_SCHEMAS,
+            response = client.complete(messages=messages,
+                                       tools=TOOL_SCHEMAS if stats["input_tokens"] + stats["output_tokens"] <= SOFT_TOTAL_TOKENS else [],
                                        max_tokens=min(8192, remaining - estimated_input))
         except Exception as exc:
             # External SDK errors may contain request headers; never persist their text.
@@ -304,7 +355,7 @@ def run_analysis(ticker: str, as_of: str, *, client: Any,
                                      "input_tokens": incoming, "output_tokens": outgoing,
                                      "cache_hit_tokens": cached})
         if stats["input_tokens"] + stats["output_tokens"] > MAX_TOTAL_TOKENS:
-            return reject("token_limit", [_error("L03", "tokens", "累计 token 超过 60000。")])
+            return reject("token_limit", [_error("L03", "tokens", "累计 token 超过硬上限。")])
         message = response.get("message") or {}
         assistant = {"role": "assistant", "content": message.get("content"),
                      "reasoning_content": message.get("reasoning_content"),
@@ -312,19 +363,42 @@ def run_analysis(ticker: str, as_of: str, *, client: Any,
         messages.append(assistant)
         calls = message.get("tool_calls")
         if calls is not None:
+            if stats["input_tokens"] + stats["output_tokens"] > SOFT_TOTAL_TOKENS:
+                return reject("token_soft_limit", [_error("L03", "tool_calls", "累计 token 超过软上限，不能再调用工具。")])
             if stats["tool_calls"] + len(calls) > MAX_TOOL_CALLS:
                 return reject("tool_limit", [_error("L01", "tool_calls", "工具调用超过 12 次。")])
             for item in calls:
                 stats["tool_calls"] += 1
                 function = item.get("function") or {}
-                record, error = _dispatch(function.get("name"), function.get("arguments"), ticker, as_of)
+                record, error = _dispatch(function.get("name"), function.get("arguments"), ticker, as_of, snapshot)
                 if record is not None:
-                    snapshot["calls"].append(record)
+                    if not record.get("view_only"):
+                        snapshot["calls"].append({key: record[key] for key in ("tool", "args", "envelope")})
+                        data_end = (record["envelope"].get("data") or {}).get("data_end_date")
+                        facts = (record["model_envelope"].get("data") or {}).get("facts", [])
+                        snapshot["evidence_windows"].append({
+                            "tool": record["tool"], "resolution": "latest",
+                            "window_start": data_end, "window_end": data_end,
+                            "requested_rows": None, "displayed_rows": len(facts),
+                            "fields": [fact["name"] for fact in facts]})
                     stats["tools"].append(record["tool"])
-                    _append_tool_call(archive_path, analysis_id, stats["tool_calls"], record)
-                    payload = record["envelope"]
+                    payload = record["model_envelope"]
+                    audit_record = record
                 else:
                     payload = error
+                    try:
+                        attempted = json.loads(function.get("arguments") or "{}")
+                    except (json.JSONDecodeError, TypeError):
+                        attempted = {"parse_error": True}
+                    if not isinstance(attempted, dict):
+                        attempted = {"parse_error": True}
+                    audit_record = {"tool": str(function.get("name")), "args": attempted,
+                                    "envelope": error}
+                _append_tool_call(archive_path, analysis_id, stats["tool_calls"], audit_record)
+                size = len(json.dumps(payload, ensure_ascii=False).encode())
+                stats["tool_details"].append({"tool": function.get("name"),
+                                               "args": audit_record["args"],
+                                               "bytes": size, "status": payload["status"]})
                 messages.append({"role": "tool", "tool_call_id": item.get("id"),
                                  "content": json.dumps(payload, ensure_ascii=False)})
             continue

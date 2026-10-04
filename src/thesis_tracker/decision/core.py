@@ -33,7 +33,10 @@ def _canonical(value: Any) -> str:
 
 
 def _fact(item: dict, ticker: str, date_value: str | None, source: dict | None, name: str) -> dict:
+    from thesis_tracker.decision.evidence import display_value
+
     return {"fact_id": item["fact_id"], "name": name, "value": item["value"],
+            "display": display_value(item["value"], item["unit"]),
             "unit": item["unit"], "date_or_period": date_value, "ticker": ticker,
             "source": source}
 
@@ -49,9 +52,9 @@ def fact_index(snapshot: dict) -> tuple[dict[str, dict], list[str]]:
         ticker = str(call.get("args", {}).get("ticker", call.get("args", {}).get("symbol", ""))).upper()
         source = envelope.get("source")
         found = []
-        if tool == "get_price_history" and envelope.get("status") == "ok":
+        if tool in {"get_price_history", "get_price_history_page"} and envelope.get("status") == "ok":
             latest = data.get("latest_close")
-            if isinstance(latest, dict) and latest.get("value") is not None:
+            if tool == "get_price_history" and isinstance(latest, dict) and latest.get("value") is not None:
                 found.append(_fact({"fact_id": envelope["fact_id"], **latest}, ticker,
                                    data.get("data_end_date"), source, "close"))
             for row in data.get("rows", []):
@@ -59,15 +62,17 @@ def fact_index(snapshot: dict) -> tuple[dict[str, dict], list[str]]:
                 if isinstance(close, dict) and close.get("value") is not None:
                     found.append(_fact({"fact_id": row["fact_id"], **close}, ticker,
                                        row.get("date"), source, "close"))
-        elif tool == "get_indicators" and envelope.get("status") == "ok":
-            for record in [data.get("latest"), *data.get("rows", [])]:
+        elif tool in {"get_indicators", "get_indicators_history"} and envelope.get("status") == "ok":
+            records = ([data.get("latest")] if tool == "get_indicators" else []) + data.get("rows", [])
+            for record in records:
                 if not isinstance(record, dict):
                     continue
                 for name, metric in record.get("values", {}).items():
                     if metric.get("fact_id") and metric.get("value") is not None:
                         found.append(_fact(metric, ticker, metric.get("date"), source, name))
-        elif tool == "get_fundamental_metrics":
-            groups = [data.get("metrics", {}), *(row.get("metrics", {}) for row in data.get("rows", []))]
+        elif tool in {"get_fundamental_metrics", "get_fundamental_metrics_history"}:
+            groups = ([data.get("metrics", {})] if tool == "get_fundamental_metrics" else []) + [
+                row.get("metrics", {}) for row in data.get("rows", [])]
             for metrics in groups:
                 for name, metric in metrics.items():
                     if metric.get("fact_id") and metric.get("status") == "ok" and metric.get("value") is not None:
@@ -75,6 +80,17 @@ def fact_index(snapshot: dict) -> tuple[dict[str, dict], list[str]]:
         for item in found:
             existing = index.get(item["fact_id"])
             if existing is not None and existing != item:
+                conflicts.append(item["fact_id"])
+            else:
+                index[item["fact_id"]] = item
+    if "derived_facts" in snapshot:
+        from thesis_tracker.decision.evidence import recompute_derived
+
+        expected = recompute_derived(snapshot)
+        if snapshot["derived_facts"] != expected:
+            conflicts.append("derived_facts")
+        for item in expected:
+            if item["fact_id"] in index:
                 conflicts.append(item["fact_id"])
             else:
                 index[item["fact_id"]] = item
@@ -93,8 +109,8 @@ def data_gaps(snapshot: dict) -> list[dict]:
             key = f"{tool}|{ticker}|{envelope.get('as_of')}|tool"
             gaps[key] = {"id": key, "name": tool, "status": envelope.get("status"),
                          "reason": envelope.get("reason")}
-        if tool == "get_indicators":
-            records = [data.get("latest"), *data.get("rows", [])]
+        if tool in {"get_indicators", "get_indicators_history"}:
+            records = ([data.get("latest")] if tool == "get_indicators" else []) + data.get("rows", [])
             groups = [(r.get("date"), r.get("values", {})) for r in records if isinstance(r, dict)]
         elif tool == "get_fundamental_metrics":
             groups = [("latest", data.get("metrics", {}))]
@@ -142,12 +158,13 @@ def build_card(draft: dict, snapshot: dict) -> dict:
     """Fill facts, gaps and disclaimer in Python; judgment fields come from the draft."""
     index, _ = fact_index(snapshot)
     card = {key: value for key, value in draft.items() if key not in {
-        "facts", "gaps", "disclaimer", "confidence_calibration", "creation_price"}}
+        "facts", "gaps", "disclaimer", "confidence_calibration", "creation_price", "evidence_windows"}}
     card["creation_price"] = _creation_price(snapshot)
     card["facts"] = [index[fact_id] for fact_id in card.get("fact_ids", []) if fact_id in index]
     card["gaps"] = data_gaps(snapshot)
     card["disclaimer"] = DISCLAIMER
     card["confidence_calibration"] = "未校准"
+    card["evidence_windows"] = snapshot.get("evidence_windows", [])
     return card
 
 
@@ -194,6 +211,8 @@ def validate_card(card: dict, snapshot: dict) -> list[dict]:
                 if fact_id in index and index[fact_id]["ticker"] == ticker]
     if card.get("facts") != expected:
         add("D01", "facts", "事实表必须由 Python 按快照中的编号、数值和来源完整填入。")
+    if card.get("evidence_windows") != snapshot.get("evidence_windows", []):
+        add("D01", "evidence_windows", "证据窗口必须由 Python 按实际展示记录填入。")
     for i, call in enumerate(snapshot.get("calls", [])):
         envelope = call.get("envelope", {})
         if envelope.get("as_of") != as_of or call.get("args", {}).get("as_of") != as_of:
@@ -291,12 +310,12 @@ def render_card(card: dict, snapshot: dict) -> str:
     index, _ = fact_index(snapshot)
     def fill(match: re.Match) -> str:
         item = index[match.group(1)]
-        return f"{item['value']} {item['unit']}"
+        return f"{item['display']} {item['unit']}"
     lines = [f"{card['ticker']}｜{card['as_of']}｜{card['horizon']}",
              f"AI 判断：{card['bias']} / {card['action']}｜置信度 {card['confidence']}（未校准）",
              f"买点 {card.get('entry_range')}｜止损 {card.get('stop_loss')}｜目标 {card.get('target_price')}",
              "事实表："]
-    lines += [f"- {item['name']}: {item['value']} {item['unit']} ({item['fact_id']})"
+    lines += [f"- {item['name']}: {item['display']} {item['unit']} ({item['fact_id']})"
               for item in card["facts"]]
     lines += ["理由：", *[f"- {PLACEHOLDER.sub(fill, item['text'])}" for item in card["reasons"]],
               "失效条件：", *[f"- {item['kind']} {item.get('price')}: {PLACEHOLDER.sub(fill, item.get('text', ''))}"

@@ -27,8 +27,15 @@ def main(argv: list[str] | None = None, *, client: Any = None,
     stats = result["stats"]
     print(f"分析 {args.ticker.upper()}｜{args.as_of}｜{result['status']}")
     print(f"工具调用 {stats['tool_calls']} 次｜对话 {stats['rounds']} 轮｜修正 {stats['revisions']} 次")
+    print(f"基础包字节 {stats['base_pack_bytes']}｜目录字节 {stats['catalog_bytes']}｜预取 {stats['prefetch_calls']} 次")
     print("实际工具：" + ("、".join(stats["tools"]) if stats["tools"] else "无"))
+    print("逐次工具字节：")
+    for number, item in enumerate(stats["tool_details"], 1):
+        print(f"- {number}. {item['tool']} {item['args']}：{item['bytes']} 字节，{item['status']}")
     print(f"token 输入 {stats['input_tokens']}｜输出 {stats['output_tokens']}｜缓存命中 {stats['cache_hit_tokens']}")
+    print("逐轮 token：")
+    for number, item in enumerate(stats["model_calls"], 1):
+        print(f"- {number}. 输入 {item['input_tokens']}｜输出 {item['output_tokens']}｜缓存命中 {item['cache_hit_tokens']}")
     if result["status"] == "passed":
         print(result["rendered"])
         print(f"存档编号：{result['card_id']}")
