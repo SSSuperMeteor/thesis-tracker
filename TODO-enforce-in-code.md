@@ -82,15 +82,16 @@ discovery 层能不能拿到一个经过验证的真实 regression case。
 - 某个 metric 对某个行业是否 `not_applicable`
 - 何时应该停下来报告而不是继续修
 
-## Decision Mode validator（设计已定，代码未强制）
+## Decision Mode validator（已由代码强制，2026-10-04）
 
-`docs/design/decision-mode.md` 第 5 节规定"校验失败不出卡"。以下 5 条目前没有任何
-代码强制，属"违反就报错"的机械约束，应下沉进 Decision Mode 的 Python validator：
+`decision.core.validate_card` 实现第 10.2 节 D01–D10，全部违规项一次返回；
+`append_card` 和 `render_card` 均在违规时拒绝。对应
+`tests/test_decision_core.py` 的合法卡、对抗变异、配对矩阵、价位、只读/断网、存档测试。
 
 | 约束 | 实现方式 |
 |---|---|
-| 标为事实的数字与对应 `fact_id` 的工具返回值不一致 | 出卡前用 `fact_id` 回查工具 envelope 的 `data`，逐值比对；不一致即拒绝出卡 |
-| 价格数据不可用 | 出卡前检查价格类工具 envelope 的 `status`；非 `ok` 即拒绝出卡 |
-| 价位不自洽（例如做多时止损高于买点） | validator 对价位做机械不等式检查；不满足即拒绝出卡 |
-| 缺少数据缺口披露 | 卡必须带数据缺口字段；缺字段即拒绝出卡 |
-| 缺少失效条件 | 卡必须带非空失效条件；缺字段即拒绝出卡 |
+| 事实数字与对应 `fact_id` 不一致 | D01；`test_adversarial_mutations_are_rejected` |
+| 价格不可用或过期 | D03；`test_unavailable_price_rejected`、`test_stale_or_future_tool_data_rejected` |
+| 价位不自洽 | D05；`test_hold_and_avoid_price_rules`、对抗变异 |
+| 缺少数据缺口披露 | D06；对抗变异 |
+| 缺少机器可检查的失效条件 | D07；对抗变异、`test_every_invalidation_price_must_be_positive` |
