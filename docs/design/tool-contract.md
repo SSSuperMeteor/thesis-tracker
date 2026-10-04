@@ -55,7 +55,8 @@
 - 每个数字带单位和期间或日期。
 - 算不出来时用大白话写清原因。
 - 默认只返回最新值和结论；完整历史序列走单独调用；单次返回量要有上限。
-- `fact_id` 的用途是 Python 校验 AI 引用的数字，**不是给 AI 读的**。
+- `fact_id` 的用途是 Python 校验 AI 引用的数字；模型会看到并原样引用编号，
+  但不靠编号推断数值。
 
 ---
 
@@ -269,3 +270,26 @@
   前 20 个十六进制字符，哈希输入为 ticker、指标名、财期结束日、数值、
   公式和排序后的叶子 `source_fact_ids`；envelope 的编号由最新八项
   编号或失败代码再次哈希生成。依据：同一期修订前后的确定性编号测试。
+
+## 9. Decision Mode 模型证据视图（已定，2026-10-04）
+
+底层三个工具的计算、精确值、现有 `fact_id`、resolver 与默认 envelope 不变。
+Decision Mode 在调用边界另造模型视图：每个可见数值事实给 `fact_id`、`display`、
+单位、日期或财期；完整精确值留在 `EvidenceSnapshot` 和卡的事实表，validator
+从快照重建并核对。显示格式与校验器渲染共用 `decision.evidence.display_value`：
+`USD/share`、百分比、百分点保留两位小数，`shares` 保留整数，其它单位保留四位；
+均用十进制 `ROUND_HALF_UP`，固定小数位。不能从 `display` 回推精确值。
+
+派生事实使用 `derived|ticker|name|date|SHA256前20位`；哈希输入是
+`[ticker,name,精确值,date,公式,source_fact_ids]` 的紧凑 JSON。公式和来源行编号
+随派生事实存档；validator 从快照中的原始价格工具行重新计算并比较整组派生事实。
+旧价格、指标、财务指标 `fact_id` 不改。来源数据不足或分母为零时不生成派生事实。
+
+模型面对的基础包和每次工具视图上限 32 KiB。历史行太多时，从最早行开始省略，
+同时返回 `truncated: true` 与 `truncation_reason` 明文；单条仍过大则返回显式错误，
+绝不静默裁切。未截断也明确返回 `truncated: false`。
+模型只可用显式 `resolution` + `fields` 请求价格或核心指标历史；
+`full_history` 原始页不再列于模型 schema，旧请求得到可修正的
+`resolution_required`。目录只列名字、定义、分辨率和估计字节数，不含观测值。
+依据：旧 100 行指标 envelope 713,471 字节；默认页 7,657 字节，
+本轮离线测量及 `tests/test_decision_evidence.py` 的字节、来源、显示回归测试。
