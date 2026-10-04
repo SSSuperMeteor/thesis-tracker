@@ -23,6 +23,7 @@ data/corpus.db
 data/corpus.db-*
 data/raw/
 data/cache/
+data/decisions/
 
 eval/results/
 *.log

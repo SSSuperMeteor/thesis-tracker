@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 ingest = "thesis_tracker.ingest.cli:main"
 prices-ingest = "thesis_tracker.prices_batch:main"
+decision-snapshot = "thesis_tracker.decision.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.11,<0.12.0"]

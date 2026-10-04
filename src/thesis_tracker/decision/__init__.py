@@ -1,1 +1,1 @@
-"""Optional decision mode package."""
+"""Deterministic Decision Mode card boundary."""
