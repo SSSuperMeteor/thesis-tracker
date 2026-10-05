@@ -33,7 +33,14 @@ STATUS_LABELS = {
 # Kinds this round implements.  Later rounds add scraping and ingestion kinds;
 # the column is free text so adding one needs no migration.
 KIND_ANALYZE = "analyze"
-KIND_LABELS = {KIND_ANALYZE: "生成建议卡"}
+KIND_CHAT_TURN = "chat_turn"
+KIND_LABELS = {KIND_ANALYZE: "生成建议卡", KIND_CHAT_TURN: "回答提问"}
+
+# Slot rules.  An analysis is expensive and serialised: exactly one at a time.
+# A chat turn is short, so two may run together — but never two turns of the
+# same conversation, which would let one answer race another's context.
+MAX_ANALYSIS_SLOTS = 1
+MAX_CHAT_SLOTS = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -104,6 +111,13 @@ class JobStore:
         queued = self.queued()
         return queued[0] if queued else None
 
+    def queued_of_kind(self, kind: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM jobs WHERE status='queued' AND kind=? "
+                "ORDER BY created_at ASC, rowid ASC", (kind,)).fetchall()
+        return [_row_to_job(row) for row in rows]
+
     def running_job(self) -> dict | None:
         with self._connect() as connection:
             row = connection.execute(
@@ -126,27 +140,72 @@ class JobStore:
         return self.get(job_id)
 
     def claim_next(self) -> dict | None:
-        """Take the oldest queued job for the single running slot, if it is free."""
+        """Take the oldest queued analysis for the single analysis slot.
+
+        Chat turns are excluded: they have their own slots and their own
+        concurrency rule, so an analysis never blocks on, or is blocked by, a
+        conversation.
+        """
+        return self._claim(kind=KIND_ANALYZE, max_slots=MAX_ANALYSIS_SLOTS,
+                           per_conversation=False)
+
+    def claim_chat_turn(self) -> dict | None:
+        """Take the oldest queued chat turn, respecting both chat slot rules."""
+        return self._claim(kind=KIND_CHAT_TURN, max_slots=MAX_CHAT_SLOTS,
+                           per_conversation=True)
+
+    def _claim(self, *, kind: str, max_slots: int,
+               per_conversation: bool) -> dict | None:
+        """Claim the oldest queued job of one kind, atomically.
+
+        The whole decision runs inside one ``BEGIN IMMEDIATE`` transaction, so
+        two threads racing for the last free slot cannot both win: SQLite
+        serialises the writers and the second one sees the first one's row.
+        For chat turns the running rows are also inspected per conversation,
+        because the slot count alone would allow a conversation to run two of
+        its own turns at once.
+        """
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            busy = connection.execute(
-                "SELECT 1 FROM jobs WHERE status='running' LIMIT 1").fetchone()
-            if busy is not None:
+            running = connection.execute(
+                "SELECT parameters_json FROM jobs WHERE status='running' AND kind=?",
+                (kind,)).fetchall()
+            if len(running) >= max_slots:
                 connection.rollback()
                 return None
-            row = connection.execute(
-                "SELECT job_id FROM jobs WHERE status='queued' "
-                "ORDER BY created_at ASC, rowid ASC LIMIT 1").fetchone()
-            if row is None:
+            busy_conversations = {json.loads(row["parameters_json"] or "{}").get(
+                "conversation_id") for row in running} if per_conversation else set()
+            candidates = connection.execute(
+                "SELECT job_id, parameters_json FROM jobs WHERE status='queued' AND kind=? "
+                "ORDER BY created_at ASC, rowid ASC", (kind,)).fetchall()
+            chosen = None
+            for candidate in candidates:
+                if per_conversation:
+                    conversation_id = json.loads(
+                        candidate["parameters_json"] or "{}").get("conversation_id")
+                    if conversation_id in busy_conversations:
+                        continue
+                chosen = candidate["job_id"]
+                break
+            if chosen is None:
                 connection.rollback()
                 return None
             connection.execute(
                 "UPDATE jobs SET status='running', started_at=? WHERE job_id=?",
-                (_now(), row["job_id"]))
+                (_now(), chosen))
             connection.commit()
             claimed = connection.execute(
-                "SELECT * FROM jobs WHERE job_id=?", (row["job_id"],)).fetchone()
+                "SELECT * FROM jobs WHERE job_id=?", (chosen,)).fetchone()
         return _row_to_job(claimed)
+
+    def running_count(self, kind: str | None = None) -> int:
+        query = "SELECT COUNT(*) FROM jobs WHERE status='running'"
+        parameters: tuple = ()
+        if kind is not None:
+            query += " AND kind=?"
+            parameters = (kind,)
+        with self._connect() as connection:
+            return connection.execute(query, parameters).fetchone()[0]
 
     def mark_running(self, job_id: str) -> None:
         with self._connect() as connection:
