@@ -4,13 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
 <title>Thesis Tracker 本机工作台</title>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<a class="skip" href="#main">跳到主内容</a>
+<a class="skip-link" href="#main">跳到主内容</a>
+<div class="shell">
+  <nav class="sidebar" aria-label="主导航">
+    <p class="brand">Thesis Tracker<span>本机研究工作台</span></p>
+    <div class="nav" id="nav"></div>
+  </nav>
+  <main id="main" tabindex="-1"></main>
+</div>
 <noscript><p>这个工作台需要 JavaScript 才能显示数据。</p></noscript>
-<main id="main"><p>正在加载。</p></main>
 <script src="/app.js" type="module"></script>
 </body>
 </html>
