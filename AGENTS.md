@@ -15,6 +15,7 @@ Stage，否则不要顺手重构；但任务明确要求时，正常修改，不
 uv run pytest            # 全量测试
 uv run ruff check .      # lint
 uv run ingest NVDA AMD --latest   # 真实数据验证（Stage 1 SEC 采集，写入本地 runtime data）
+uv run webapp            # 本机网页工作台（只绑 127.0.0.1，打印带令牌的网址）
 ```
 
 改动提交前，与本轮相关的命令必须全部通过。只跑相关的，不为形式全跑。
