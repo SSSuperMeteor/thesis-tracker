@@ -52,6 +52,11 @@ uv run webapp            # 打印本机网址；Ctrl-C 停止
 | 建议卡列表 | `#/cards?ticker=&horizon=` | 周期、动作、倾向、创建时间、一列"规则版本"短标记、"旧规则"标注；可按公司与周期筛选 |
 | 建议卡详情 | `#/cards/<CARD_ID>` | 左阅读栏与右证据面板作为一组居中；证据按来源分组，吸顶并自身滚动 |
 | 任务 | `#/jobs`、`#/jobs/<JOB_ID>` | 任务列表与逐步进度、错误、结果 |
+| 对话 | `#/chat/<CONVERSATION_ID>` | 左阅读栏（消息与被拒报告）与右证据面板；公司页有"对话"段与"新建对话"，卡详情可"追问这张卡" |
+
+对话的完整说明（存储、工具、校验规则 C01–C03、限额、用量与费用、提议流程）
+见 [chat.md](chat.md)。它复用本页的令牌 / Host / Origin / POST-only / CSP 与
+`data/webapp/` 目录，不新增任何运行时依赖。
 
 设计约束以 `.agents/skills/thesis-tracker-ui/SKILL.md` 为准：设计令牌、字号阶梯、
 状态"文字加形状"、动效只有三处、无障碍底线。补充说明本轮的具体取舍：
@@ -91,6 +96,13 @@ uv run webapp            # 打印本机网址；Ctrl-C 停止
 | GET | `/api/usage` | 最近几次分析的平均 token 用量，不含金额 |
 | GET | `/api/jobs`、`/api/jobs/<JOB_ID>` | 任务列表与详情 |
 | POST | `/api/analyze` | 创建分析任务；请求体必须含 `"confirm": true` |
+| GET | `/api/companies/conversations?ticker=` | 该公司的对话列表 |
+| GET | `/api/conversations/<ID>` | 一次对话的全部内容（消息、证据、用量） |
+| POST | `/api/companies/conversations` | 新建对话 |
+| POST | `/api/conversations/<ID>/messages` | 发一条消息，创建回答任务 |
+| POST | `/api/conversations/archive` | 归档一个对话 |
+| POST | `/api/proposals/confirm`、`/api/proposals/dismiss` | 确认或忽略生成建议卡的提议 |
+| GET | `/api/balance` | 只读的 DeepSeek 账户余额（服务端请求，key 不下发） |
 
 **所有数字和标签都是字符串**，由后端沿用现有 display 规则算好，前端只渲染
 （`display_text`：单位中文化、百分比/倍数/百分点分类、2 位小数等，见
@@ -345,9 +357,10 @@ gitignore；进度回调可选且默认行为不变；时间戳统一由后端�
 - **自然语言添加公司**：新增一个 `kind`（例如 `add_company`）与一个 POST 接口，
   沿用同一套令牌/Host/Origin/POST-only 与任务持久化；采集仍然调用现有
   `scripts/collect_fundamental_snapshots` 的采集路径，不把网络逻辑写进网页层。
-- **聊天框**：新增一个 `kind`（例如 `ask`）与一个消息表；Stage 2 的
-  `qa.sec_qa.answer_sec_question` 已经是现成入口。会话必须同样经过令牌校验，
-  并且不能绕过 citation 规则。
+- ~~**聊天框**~~（第三轮已实现，见 [chat.md](chat.md)）：`kind=chat_turn` 与
+  `data/webapp/chat.db`。与当初的设想不同，本轮没有接 Stage 2 的
+  `qa.sec_qa.answer_sec_question`：对话的上下文限定为一家公司的**结构化数据与建议卡**，
+  不暴露任何文本检索，因此回答受 C01–C03 而不是 citation 规则约束。
 - **抓取财报**：`kind=ingest_filings`，进度事件复用现有形状（工具名、参数、字节、
   状态），失败语义复用现有 failure taxonomy。
 - **页面扩展**：`app.js` 的路由表加一个 `head` 分支即可；样式继续只用设计令牌，
