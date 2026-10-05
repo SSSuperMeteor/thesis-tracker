@@ -53,6 +53,10 @@ FUNDAMENTAL_METRICS = (
 
 USAGE_WINDOW = 5
 
+# The heading the card renderer uses for its arithmetic section; the page strips
+# the language from it rather than renaming a section the CLI still prints.
+AUTO_COMPUTED_HEADING = "自动计算（Python）"
+
 
 def quarter_key(period_end: str) -> str:
     """Calendar-quarter bucket of a real period end date, e.g. 2026-04-25 -> 2026Q2.
@@ -541,6 +545,16 @@ def advice_hints(card: dict, facts: list[dict], *, index: dict[str, dict] | None
     return hints
 
 
+def strip_language_suffix(heading: str) -> str:
+    """Drop an implementation-language suffix from a reused heading.
+
+    The card renderer labels its arithmetic section "自动计算（Python）"; which
+    language computes it is not something a reader needs, so the page shows the
+    same heading without the parenthetical.
+    """
+    return re.sub(r"（[^）]*）\s*$", "", heading).strip()
+
+
 def adjust_auto_computed(items: list[dict]) -> list[dict]:
     """Shorten two auto-computed lines that repeat their own label.
 
@@ -844,6 +858,7 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
                     for item in card.get("reasons") or []],
         "invalidations": invalidations,
         "auto_computed": adjust_auto_computed(auto_computed(card, snapshot)),
+        "auto_computed_heading": strip_language_suffix(AUTO_COMPUTED_HEADING),
         "hints": advice_hints(card, facts, index=index),
         "fact_groups": group_facts(facts),
         "gaps": [{"name": item["name"],

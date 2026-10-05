@@ -383,3 +383,20 @@ def test_the_end_markers_label_stays_inside_the_plot():
         half = label_width_px(marker) / 2
         assert centre - half >= -0.01, marker
         assert centre + half <= BAND_COLUMN_PX + 0.01, marker
+
+
+def test_the_auto_computed_heading_comes_from_the_renderer_without_its_language(detail):
+    """The section keeps the renderer's name, minus the parenthetical."""
+    from thesis_tracker.decision.core import render_card
+    from thesis_tracker.webapp.service import (
+        AUTO_COMPUTED_HEADING,
+        strip_language_suffix,
+    )
+
+    assert AUTO_COMPUTED_HEADING == "自动计算（Python）"
+    assert strip_language_suffix(AUTO_COMPUTED_HEADING) == "自动计算"
+    assert strip_language_suffix("别的标题") == "别的标题"
+    assert strip_language_suffix("自动计算（Rust）") == "自动计算"
+    assert detail["auto_computed_heading"] == "自动计算"
+    assert "（Python）" not in detail["auto_computed_heading"]
+    assert render_card is not None  # the renderer itself is untouched

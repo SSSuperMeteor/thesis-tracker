@@ -597,7 +597,7 @@ async function viewCard(host, cardId) {
       el("p", { class: "machine" }, segments(item.machine_check, pick)),
       el("p", { class: "explain" }, segments(item.explanation, pick)),
     ]))),
-    block("自动计算", [
+    block(card.auto_computed_heading, [
       table([{ label: "项目" }, { label: "结果" }],
         card.auto_computed.map((item) => el("tr", {}, [
           el("th", { scope: "row", text: item.label }),
