@@ -16,11 +16,13 @@ def main(argv: list[str] | None = None, *, client: Any = None,
     parser = argparse.ArgumentParser(description="Analyze one ticker with DeepSeek Decision Mode")
     parser.add_argument("ticker")
     parser.add_argument("--as-of", default=date.today().isoformat())
+    parser.add_argument("--horizon", choices=("short", "mid", "long"), default="mid",
+                        help="analysis horizon; short/mid/long selects the prefetched history tier")
     args = parser.parse_args(argv)
     try:
         active_client = client if client is not None else DeepSeekClient()
-        result = run_analysis(args.ticker, args.as_of, client=active_client,
-                              archive_path=archive_path)
+        result = run_analysis(args.ticker, args.as_of, horizon=args.horizon,
+                              client=active_client, archive_path=archive_path)
     except ValueError as exc:
         print(f"拒绝：{type(exc).__name__}；请检查标的、日期和 DEEPSEEK_API_KEY 配置。")
         return 1

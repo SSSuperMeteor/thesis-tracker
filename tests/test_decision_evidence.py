@@ -118,7 +118,8 @@ def test_base_pack_and_landmarks_are_grounded_in_snapshot():
     assert not conflicts
     for item in base["facts"]:
         assert item["fact_id"] in index
-        assert item["display"] == display_value(index[item["fact_id"]]["value"], item["unit"])
+        assert item["display"] == display_value(index[item["fact_id"]]["value"], item["unit"],
+                                                name=item["name"])
     assert {"high_52w", "low_52w", "high_3y", "low_3y", "high_5y", "low_5y",
             "return_1m", "return_3m", "return_6m", "return_1y"} <= {
         item["name"] for item in base["facts"]}
@@ -137,10 +138,13 @@ def test_card_render_uses_same_display_rule_as_model_evidence():
              "fact_ids": [price, rsi["fact_id"]],
              "reasons": [{"text": "RSI {fact:" + rsi["fact_id"] + "}",
                           "fact_ids": [rsi["fact_id"]]}],
-             "invalidations": [{"kind": "close_below", "price": 290, "text": "跌破止损位"}]}
+             "invalidations": [{"kind": "close_below", "price": 290, "text": "跌破止损位"}],
+            "stop_rationale": "跌破 {fact:" + rsi["fact_id"] + "} 离场。",
+            "target_rationale": "上看 {fact:" + rsi["fact_id"] + "} 上方。"}
     card = build_card(draft, snapshot)
-    assert card["facts"][1]["display"] == display_value(rsi["value"], rsi["unit"])
-    assert display_value(rsi["value"], rsi["unit"]) in render_card(card, snapshot)
+    assert card["facts"][1]["display"] == display_value(rsi["value"], rsi["unit"],
+                                                       name="rsi_14")
+    assert display_value(rsi["value"], rsi["unit"], name="rsi_14") in render_card(card, snapshot)
 
 
 def test_return_landmark_does_not_use_stale_window_start():

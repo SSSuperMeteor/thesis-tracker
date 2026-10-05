@@ -21,6 +21,8 @@ from thesis_tracker.decision.core import (
     validate_card,
 )
 from thesis_tracker.decision.evidence import (
+    HORIZON_LABELS,
+    HORIZON_RESOLUTIONS,
     RESOLUTIONS,
     TOOL_HISTORY_FIELDS,
     compact_tool_response,
@@ -32,7 +34,7 @@ from thesis_tracker.indicator_tool import get_indicators
 from thesis_tracker.prices import get_price_history
 
 MODEL = "deepseek-flash"
-PROMPT_VERSION = "decision-agent-v3-tool-contract-2026-10-04"
+PROMPT_VERSION = "decision-agent-v4-horizon-rules-2026-10-04"
 MAX_TOOL_CALLS = 12
 MAX_ROUNDS = 16
 MAX_TOTAL_TOKENS = 1_500_000
@@ -45,22 +47,31 @@ MAX_REVISIONS = 2
 SPY_NOTE_EN = "SPY is only available on the default latest page; tiered history requires the target ticker."
 
 SYSTEM_PROMPT = """你是 Decision Mode 研究判断模型。只使用基础包或工具返回中有 fact_id 的事实。
-你的立场必须明确：给出看多/中性/看空、买入/分批/持有/减仓/回避、具体买点、止损和目标。
-减仓或回避时这些多头价位字段填 null，明确给出收盘价突破或跌破的失效阈值。
+你的立场必须明确：给出看多/中性/看空、买入/分批/持有/减仓/回避/观望、具体买点、止损和目标。
+观望、减仓或回避时买点、止损、目标填 null，stop_rationale 与 target_rationale 留空，
+但仍要给出收盘价突破或跌破的失效阈值。中性倾向才可以使用“观望”。
+本次分析周期由命令行固定，horizon 必须回填与之对应的中文档位（短期/中期/长期），不要自行更改。
 事实数值只能来自工具。JSON 草稿只列 fact_id，不写事实表、数据缺口或免责声明；
 Python 会按 fact_id 填值。理由和失效条件文字引用事实数字只能写 {fact:<完整 fact_id>}。
 除 YYYY-MM-DD 日期、Q1-Q4/2026-Q3 财期及“3 个季度”类时间计数外，文字不写裸数字。
 每条理由至少列一个 fact_id。必须有 kind=close_below 或 close_above 且 price>0 的失效条件。
+理由正文的动作词必须与 action 一致：action 为买入时理由里不写“分批/加仓”，为持有时不写“买入/减仓”，
+以此类推；条件式动作只写在失效条件文字里（例如“跌破则转为回避”“突破可上调为分批买入”）。
+买入、分批、持有必须填写 stop_rationale 和 target_rationale，各写一句依据并至少引用一个 fact_id；
+这两个字段与理由适用同一条裸数字规则。
+趋势性描述（例如“转负”“放量”“持续”“走高”）只有在引用了对应历史档位的事实后才可写，否则不要写。
+按周期侧重：短期以近三个月价格、ATR 倍数止损和相对强弱为主；中期兼顾价格与财务质量；
+长期以财务质量、三到五年位置为主；买点给区间。
 不要隐瞒 unavailable、not_applicable 或 null；Python 自动把它们写进数据缺口。
 工具 as_of 由程序固定，永远不要在工具参数中传 as_of。可调用目标股票与 SPY（SPY 仅可用于默认最新页；分档历史只支持目标标的）。
-基础包已提供最新值和关键地标；历史按 resolution 与 fields 请求，只引用所见 fact_id。
-先选周期：短期优先 weekly_3m，中期优先 monthly_2y，长期优先 quarterly_5y；可按需加档。
+基础包已提供最新值、关键地标和本次周期的默认历史档位；可按需请求其他档位，只引用所见 fact_id。
 只输出一个 JSON 对象，不要 markdown。schema 示例：
 {"ticker":"目标标的","as_of":"分析日期","horizon":"中期","bias":"看多",
-"action":"买入","confidence":"中","entry_range":null,"stop_loss":null,
-"target_price":null,"fact_ids":["真实编号"],"reasons":[{"text":"观察 {fact:真实编号}",
-"fact_ids":["真实编号"]}],"invalidations":[{"kind":"close_below","price":null,
-"text":"收盘价跌破止损位"}]}。
+"action":"买入","confidence":"中","entry_range":[300,320],"stop_loss":null,
+"target_price":null,"stop_rationale":"跌破 {fact:真实编号} 离场","target_rationale":"上看 {fact:真实编号}",
+"fact_ids":["真实编号"],"reasons":[{"text":"观察 {fact:真实编号}","fact_ids":["真实编号"]}],
+"invalidations":[{"kind":"close_below","price":null,"text":"收盘价跌破止损位"}]}。
+entry_range 必须是两个数字的数组（例如 [300, 320]）或 null，不得写成 {"low":…,"high":…} 这类对象。
 周期只能短期/中期/长期；置信度只能低/中/高，不写百分比。
 价格必须符合动作的确定性规则；请先读取工具结果再判断。"""
 
@@ -152,16 +163,24 @@ def _audit_connection(path: Path | str) -> sqlite3.Connection:
         for action in ("UPDATE", "DELETE"):
             conn.execute(f"""CREATE TRIGGER IF NOT EXISTS {table}_no_{action.lower()}
                 BEFORE {action} ON {table} BEGIN SELECT RAISE(ABORT, 'immutable'); END""")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(decision_attempts)")}
+    if "requested_horizon" not in columns:
+        conn.execute("ALTER TABLE decision_attempts ADD COLUMN requested_horizon TEXT")
     conn.commit()
     return conn
 
 
 def _append_attempt(path: Path | str, analysis_id: str, number: int, ticker: str, as_of: str,
-                    raw: str, violations: list[dict], passed: bool) -> None:
+                    raw: str, violations: list[dict], passed: bool,
+                    horizon: str | None = None) -> None:
     with _audit_connection(path) as conn:
-        conn.execute("INSERT INTO decision_attempts VALUES (?,?,?,?,?,?,?,?,?)", (
+        conn.execute("""INSERT INTO decision_attempts
+            (attempt_id, analysis_id, attempt_no, ticker, as_of, raw_output,
+             violations_json, passed, created_at, requested_horizon)
+            VALUES (?,?,?,?,?,?,?,?,?,?)""", (
             str(uuid.uuid4()), analysis_id, number, ticker, as_of, raw,
-            json.dumps(violations, ensure_ascii=False), int(passed), datetime.now(timezone.utc).isoformat()))
+            json.dumps(violations, ensure_ascii=False), int(passed),
+            datetime.now(timezone.utc).isoformat(), horizon))
 
 
 def _append_model_call(path: Path | str, analysis_id: str, round_no: int, response: dict) -> None:
@@ -221,6 +240,9 @@ def _parse_draft(raw: str) -> tuple[dict | None, list[dict]]:
     for key in ("stop_loss", "target_price"):
         if draft.get(key) is not None and not isinstance(draft[key], (int, float)):
             errors.append(_error("D00", key, "价位须是数字或 null。"))
+    for key in ("stop_rationale", "target_rationale"):
+        if draft.get(key) is not None and not isinstance(draft[key], str):
+            errors.append(_error("D00", key, "止损与目标依据须是文字或 null。"))
     return (None if errors else draft), errors
 
 
@@ -332,15 +354,17 @@ def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str,
     return record, None
 
 
-def run_analysis(ticker: str, as_of: str, *, client: Any,
+def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
                  archive_path: Path | str = DEFAULT_ARCHIVE) -> dict:
     """Run one bounded analysis. Only a validated card is archived and rendered."""
     ticker = ticker.upper()
     if not re.fullmatch(r"[A-Z0-9.-]+", ticker):
         raise ValueError("invalid ticker")
+    if horizon not in HORIZON_RESOLUTIONS:
+        raise ValueError("invalid horizon")
     date.fromisoformat(as_of)
     analysis_id = str(uuid.uuid4())
-    snapshot, base, catalog = prepare_evidence(ticker, as_of)
+    snapshot, base, catalog = prepare_evidence(ticker, as_of, horizon=horizon)
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": json.dumps({"task": f"分析 {ticker}，as_of={as_of}。按需取历史，然后输出 JSON 建议卡。",
                                 "base_pack": base, "catalog": catalog}, ensure_ascii=False)}]
@@ -454,7 +478,7 @@ def run_analysis(ticker: str, as_of: str, *, client: Any,
             except (TypeError, ValueError, KeyError, AttributeError) as exc:
                 violations = [_error("D00", "model_output", f"草稿结构无效（{type(exc).__name__}）。")]
         _append_attempt(archive_path, analysis_id, stats["revisions"] + 1, ticker, as_of,
-                        raw, violations, not violations)
+                        raw, violations, not violations, HORIZON_LABELS[horizon])
         if not violations and card is not None:
             meta = {"requested_model": MODEL, "returned_model": response.get("model"),
                     "fingerprint": response.get("system_fingerprint"), "prompt_version": PROMPT_VERSION,

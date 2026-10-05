@@ -51,6 +51,8 @@ def card(snapshot):
                      "fact_ids": [rsi["fact_id"]]}],
         "invalidations": [{"kind": "close_below", "price": 290,
                            "text": "收盘价跌破止损位"}],
+        "stop_rationale": "RSI {fact:" + rsi["fact_id"] + "} 走弱则离场。",
+        "target_rationale": "上看 {fact:" + close["fact_id"] + "} 上方。",
     }, snapshot)
 
 
@@ -138,8 +140,9 @@ def test_archive_is_append_only_and_reproducible(card, snapshot, tmp_path):
     ("看多", "买入", True), ("看多", "分批", True), ("看多", "持有", True),
     ("看多", "减仓", False), ("看多", "回避", False),
     ("中性", "分批", True), ("中性", "持有", True), ("中性", "回避", True),
-    ("中性", "买入", False), ("中性", "减仓", False),
-    ("看空", "减仓", True), ("看空", "回避", True),
+    ("中性", "观望", True), ("中性", "买入", False), ("中性", "减仓", False),
+    ("看空", "减仓", True), ("看空", "回避", True), ("看空", "观望", False),
+    ("看多", "观望", False),
     ("看空", "买入", False), ("看空", "分批", False), ("看空", "持有", False),
 ])
 def test_bias_action_matrix(card, snapshot, bias, action, valid):
@@ -148,7 +151,7 @@ def test_bias_action_matrix(card, snapshot, bias, action, valid):
         card["entry_range"] = None
         card["stop_loss"] = 290
         card["target_price"] = 400
-    elif action in {"减仓", "回避"}:
+    elif action in {"观望", "减仓", "回避"}:
         card["entry_range"] = None
         card["stop_loss"] = None
         card["target_price"] = None

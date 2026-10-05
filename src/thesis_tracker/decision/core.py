@@ -7,6 +7,7 @@ import json
 import re
 import sqlite3
 import uuid
+from collections import Counter
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -17,13 +18,31 @@ from thesis_tracker.indicator_tool import get_indicators
 from thesis_tracker.prices import get_price_history
 
 DISCLAIMER = "本卡为 AI 研究输出，不构成持牌投资建议。"
-VALIDATOR_VERSION = "decision-validator-1"
+VALIDATOR_VERSION = "decision-validator-2"
+# Rules that depend on fields/snapshot keys introduced after v1.  Archived v1
+# cards stay readable: replaying them with their own version skips these two.
+# D11 is a pure text rule with no schema dependency and applies to both versions.
+RULES_NOT_IN_V1 = frozenset({"D12", "D13"})
 DEFAULT_ARCHIVE = Path("data/decisions/cards.db")
 ALLOWED_ACTIONS = {
     "看多": {"买入", "分批", "持有"},
-    "中性": {"分批", "持有", "回避"},
+    "中性": {"分批", "持有", "回避", "观望"},
     "看空": {"减仓", "回避"},
 }
+# D11 vocabulary: every action word belongs to exactly one action category.
+ACTION_WORDS = {
+    "买入": ("买入",),
+    "分批": ("分批", "分步", "加仓"),
+    "持有": ("持有",),
+    "减仓": ("减仓", "卖出", "清仓", "离场"),
+    "回避": ("回避",),
+    "观望": ("观望",),
+}
+# An action word starting within NEGATION_WINDOW characters after one of these
+# is a negated mention and is allowed ("不宜分批", "分批而非一次性买入" is not).
+NEGATIONS = ("而非", "不宜", "避免", "不要", "勿")
+NEGATION_WINDOW = 6
+RATIONALE_FIELDS = ("stop_rationale", "target_rationale")
 PLACEHOLDER = re.compile(r"\{fact:([^{}]+)\}")
 NUMBER = re.compile(r"(?<![A-Za-z0-9_.])[-+]?\d+(?:\.\d+)?(?![A-Za-z0-9_.])")
 
@@ -36,9 +55,40 @@ def _fact(item: dict, ticker: str, date_value: str | None, source: dict | None, 
     from thesis_tracker.decision.evidence import display_value
 
     return {"fact_id": item["fact_id"], "name": name, "value": item["value"],
-            "display": display_value(item["value"], item["unit"]),
+            "display": display_value(item["value"], item["unit"], name=name),
             "unit": item["unit"], "date_or_period": date_value, "ticker": ticker,
             "source": source}
+
+
+def _negated(text: str, start: int) -> bool:
+    """True when the action word at ``start`` follows one of the negators."""
+    for negator in NEGATIONS:
+        cursor = text.find(negator)
+        while cursor != -1:
+            end = cursor + len(negator)
+            if end <= start <= end + NEGATION_WINDOW:
+                return True
+            cursor = text.find(negator, end)
+    return False
+
+
+def foreign_action_words(text: str, action: str | None) -> list[str]:
+    """Action words in ``text`` that belong to a different action category."""
+    own = set(ACTION_WORDS.get(action or "", ()))
+    found: list[str] = []
+    for category, words in ACTION_WORDS.items():
+        if category == action:
+            continue
+        for word in words:
+            if word in own or word in found:
+                continue
+            cursor = text.find(word)
+            while cursor != -1:
+                if not _negated(text, cursor):
+                    found.append(word)
+                    break
+                cursor = text.find(word, cursor + len(word))
+    return found
 
 
 def fact_index(snapshot: dict) -> tuple[dict[str, dict], list[str]]:
@@ -187,11 +237,15 @@ def _free_numbers(text: str) -> list[Decimal]:
             if (number := _number(match.group())) is not None]
 
 
-def validate_card(card: dict, snapshot: dict) -> list[dict]:
+def validate_card(card: dict, snapshot: dict, *,
+                  version: str = VALIDATOR_VERSION) -> list[dict]:
     """Return every mechanical violation. A nonempty result forbids publication."""
     errors: list[dict] = []
+    skip = RULES_NOT_IN_V1 if version != VALIDATOR_VERSION else frozenset()
 
     def add(rule: str, location: str, message: str) -> None:
+        if rule in skip:
+            return
         errors.append({"rule": rule, "location": location, "message": message})
 
     ticker, as_of = snapshot.get("ticker"), snapshot.get("as_of")
@@ -236,6 +290,17 @@ def validate_card(card: dict, snapshot: dict) -> list[dict]:
     if not prices:
         add("D03", "snapshot.calls", "缺少本标的的价格工具调用。")
     values = {_number(item["value"]) for item in index.values() if item["ticker"] == ticker}
+    # The naked-number rule reads the same display formatter as the card, so any
+    # number the card would show ("50.06%", "1.10 倍", "333.69 美元/股") is bare.
+    from thesis_tracker.decision.evidence import display_text
+
+    for item in index.values():
+        if item["ticker"] != ticker:
+            continue
+        shown = display_text(item["value"], item["unit"], name=item["name"])
+        if shown:
+            values.update(number for match in NUMBER.finditer(shown)
+                          if (number := _number(match.group())) is not None)
     for i, reason in enumerate(card.get("reasons") or []):
         ids = reason.get("fact_ids") or []
         if not ids:
@@ -252,6 +317,9 @@ def validate_card(card: dict, snapshot: dict) -> list[dict]:
             message = ("理由中的事实数字必须使用事实占位符。" if any(value in values for value in free)
                        else "理由中的裸数字仅允许日期、财期和时间计数。")
             add("D02", f"reasons[{i}].text", message)
+        for word in foreign_action_words(content, card.get("action")):
+            add("D11", f"reasons[{i}].text",
+                f"理由正文写了与动作“{card.get('action')}”不一致的动作词“{word}”。")
     if not card.get("reasons"):
         add("D09", "reasons", "至少需要一条引用事实的理由。")
     for i, condition in enumerate(card.get("invalidations") or []):
@@ -271,6 +339,27 @@ def validate_card(card: dict, snapshot: dict) -> list[dict]:
     if card.get("bias") not in ALLOWED_ACTIONS or card.get("action") not in ALLOWED_ACTIONS.get(card.get("bias"), set()):
         add("D04", "bias/action", "倾向与动作不在允许的配对表中。")
     action = card.get("action")
+    for field in RATIONALE_FIELDS:
+        raw = card.get(field)
+        if action not in {"买入", "分批", "持有"}:
+            if raw not in (None, ""):
+                add("D12", field, "观望、减仓或回避时不得填写止损或目标依据。")
+            continue
+        if not isinstance(raw, str) or not raw.strip():
+            add("D12", field, "买入、分批或持有时必须填写止损与目标依据。")
+            continue
+        if not PLACEHOLDER.search(raw):
+            add("D12", field, "止损与目标依据必须至少引用一个事实占位符。")
+        else:
+            for fact_id in PLACEHOLDER.findall(raw):
+                if fact_id not in refs or fact_id not in index or index[fact_id]["ticker"] != ticker:
+                    add("D02", field, "止损或目标依据含无效事实占位符。")
+        free = _free_numbers(raw)
+        if free:
+            message = ("止损或目标依据中的事实数字必须使用事实占位符。"
+                       if any(value in values for value in free)
+                       else "止损或目标依据中的裸数字仅允许日期、财期和时间计数。")
+            add("D02", field, message)
     low_high = card.get("entry_range")
     stop, target = _number(card.get("stop_loss")), _number(card.get("target_price"))
     if action in {"买入", "分批"}:
@@ -286,9 +375,9 @@ def validate_card(card: dict, snapshot: dict) -> list[dict]:
         if not (low_high is None and stop is not None and closing is not None and target is not None
                 and 0 < stop < closing < target):
             add("D05", "entry_range/stop_loss/target_price", "持有须无买点区间且满足 0 < 止损 < 截至日收盘价 < 目标。")
-    elif action in {"减仓", "回避"}:
+    elif action in {"观望", "减仓", "回避"}:
         if low_high is not None or stop is not None or target is not None:
-            add("D05", "entry_range/stop_loss/target_price", "减仓或回避不得填写买点、止损或目标价。")
+            add("D05", "entry_range/stop_loss/target_price", "观望、减仓或回避不得填写买点、止损或目标价。")
     if card.get("gaps") != data_gaps(snapshot):
         add("D06", "gaps", "数据缺口必须与快照中全部不可用指标一致，不得删改。")
     conditions = card.get("invalidations") or []
@@ -298,29 +387,109 @@ def validate_card(card: dict, snapshot: dict) -> list[dict]:
         add("D07", "invalidations", "至少要有一条收盘价跌破或突破正数价位的机器可检查条件。")
     if card.get("horizon") not in {"短期", "中期", "长期"} or card.get("confidence") not in {"低", "中", "高"} or card.get("confidence_calibration") != "未校准":
         add("D08", "horizon/confidence", "周期仅三档，置信度仅低中高并须标为未校准。")
+    requested_horizon = snapshot.get("requested_horizon")
+    if requested_horizon is not None and card.get("horizon") != requested_horizon:
+        add("D13", "horizon", f"卡片周期必须等于命令行请求的周期（{requested_horizon}）。")
     if card.get("disclaimer") != DISCLAIMER:
         add("D10", "disclaimer", "固定免责声明必须由 Python 原样写入。")
     return errors
 
 
-def render_card(card: dict, snapshot: dict) -> str:
-    errors = validate_card(card, snapshot)
+def auto_computed(card: dict, snapshot: dict) -> list[dict]:
+    """Display-only arithmetic over card prices and snapshot facts.
+
+    Nothing here participates in validation; a missing input yields a plain
+    "无法计算" line with the reason instead of a guessed number.
+    """
+    index, _ = fact_index(snapshot)
+    ticker = snapshot.get("ticker")
+    action = card.get("action")
+
+    def fact_value(name: str) -> Decimal | None:
+        matches = [item for item in index.values()
+                   if item["ticker"] == ticker and item["name"] == name
+                   and item["value"] is not None]
+        return _number(matches[-1]["value"]) if matches else None
+
+    def unavailable(reason: str) -> str:
+        return f"无法计算（{reason}）"
+
+    close = _number(card.get("creation_price"))
+    stop, target = _number(card.get("stop_loss")), _number(card.get("target_price"))
+    entry_range = card.get("entry_range")
+    entry: Decimal | None = None
+    if action in {"买入", "分批"} and isinstance(entry_range, list) and len(entry_range) == 2:
+        low, high = _number(entry_range[0]), _number(entry_range[1])
+        if low is not None and high is not None:
+            entry = (low + high) / 2
+    elif action == "持有":
+        entry = close
+
+    items: list[dict] = []
+    if entry is None:
+        reason = ("该动作没有入场价" if action in {"观望", "减仓", "回避"}
+                  else "缺少买点或截至日收盘价")
+        for label in ("止损距离", "目标距离", "盈亏比"):
+            items.append({"label": label, "text": unavailable(reason)})
+    else:
+        if stop is None or entry == 0:
+            items.append({"label": "止损距离", "text": unavailable("缺少止损位或入场价")})
+        else:
+            text = f"{(entry - stop) / entry * 100:.2f}%"
+            atr = fact_value("atr_14")
+            if atr is not None and atr > 0:
+                text += f"（{(entry - stop) / atr:.2f} 倍 ATR）"
+            items.append({"label": "止损距离", "text": text})
+        if target is None or entry == 0:
+            items.append({"label": "目标距离", "text": unavailable("缺少目标位或入场价")})
+        else:
+            items.append({"label": "目标距离", "text": f"{(target - entry) / entry * 100:.2f}%"})
+        if stop is None or target is None or entry == stop:
+            items.append({"label": "盈亏比",
+                          "text": unavailable("缺少止损位、目标位，或止损等于入场价")})
+        else:
+            items.append({"label": "盈亏比", "text": f"{(target - entry) / (entry - stop):.1f}"})
+    high = fact_value("high_52w")
+    if high is None or close is None or high == 0:
+        items.append({"label": "距52周高点", "text": unavailable("缺少 52 周高点或最新收盘价")})
+    else:
+        items.append({"label": "距52周高点",
+                      "text": f"低于 52 周高点 {(high - close) / high * 100:.2f}%"})
+    return items
+
+
+def render_card(card: dict, snapshot: dict, *,
+                version: str = VALIDATOR_VERSION) -> str:
+    from thesis_tracker.decision.evidence import display_label, display_text
+
+    errors = validate_card(card, snapshot, version=version)
     if errors:
         raise ValueError(_canonical(errors))
     index, _ = fact_index(snapshot)
+    occurrences = Counter(item["name"] for item in card["facts"])
+
     def fill(match: re.Match) -> str:
         item = index[match.group(1)]
-        return f"{item['display']} {item['unit']}"
+        return display_text(item["value"], item["unit"], name=item["name"])
+
     lines = [f"{card['ticker']}｜{card['as_of']}｜{card['horizon']}",
              f"AI 判断：{card['bias']} / {card['action']}｜置信度 {card['confidence']}（未校准）",
-             f"买点 {card.get('entry_range')}｜止损 {card.get('stop_loss')}｜目标 {card.get('target_price')}",
-             "事实表："]
-    lines += [f"- {item['name']}: {item['display']} {item['unit']} ({item['fact_id']})"
+             f"买点 {card.get('entry_range')}｜止损 {card.get('stop_loss')}｜目标 {card.get('target_price')}"]
+    if card.get("stop_rationale"):
+        lines.append(f"止损依据：{PLACEHOLDER.sub(fill, card['stop_rationale'])}")
+    if card.get("target_rationale"):
+        lines.append(f"目标依据：{PLACEHOLDER.sub(fill, card['target_rationale'])}")
+    lines.append("事实表：")
+    lines += [f"- {display_label(item['name'], item['date_or_period'], multiple=occurrences[item['name']] > 1)}: "
+              f"{display_text(item['value'], item['unit'], name=item['name'])} ({item['fact_id']})"
               for item in card["facts"]]
     lines += ["理由：", *[f"- {PLACEHOLDER.sub(fill, item['text'])}" for item in card["reasons"]],
               "失效条件：", *[f"- {item['kind']} {item.get('price')}: {PLACEHOLDER.sub(fill, item.get('text', ''))}"
-                            for item in card["invalidations"]], "数据缺口："]
-    lines += [f"- {item['name']}: {item['status']} ({(item['reason'] or {}).get('message', '')})"
+                            for item in card["invalidations"]],
+              "自动计算（Python）："]
+    lines += [f"- {item['label']}: {item['text']}" for item in auto_computed(card, snapshot)]
+    lines.append("数据缺口：")
+    lines += [f"- {display_label(item['name'])}: {item['status']} ({(item['reason'] or {}).get('message', '')})"
               for item in card["gaps"]]
     return "\n".join([*lines, card["disclaimer"]])
 

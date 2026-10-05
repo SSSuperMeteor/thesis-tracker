@@ -15,6 +15,37 @@ from thesis_tracker.prices import get_price_history
 MAX_ENVELOPE_BYTES = 32 * 1024
 RESOLUTIONS = ("daily_10", "weekly_3m", "monthly_2y", "quarterly_5y")
 
+# --horizon picks the history tier prefetched before the loop starts.
+HORIZON_RESOLUTIONS = {"short": "weekly_3m", "mid": "monthly_2y", "long": "quarterly_5y"}
+HORIZON_LABELS = {"short": "短期", "mid": "中期", "long": "长期"}
+
+# Card display: metric labels, ratio classes and unit labels.  Unknown metric
+# names fall back to the raw name; unknown units keep their raw text.
+METRIC_LABELS = {
+    "gross_margin_trend": "毛利率趋势",
+    "accruals_ratio": "应计比率",
+    "cash_conversion": "现金转换",
+    "net_debt_to_ebitda": "净债务/EBITDA",
+    "interest_coverage": "利息保障倍数",
+    "diluted_share_count_yoy": "摊薄股本同比",
+    "ar_growth_vs_rev_growth": "应收增速与营收增速差",
+    "net_buyback_yield": "净回购收益率",
+    "volume_ratio_20": "成交量比",
+    "rsi_14": "RSI",
+}
+PERCENT_METRICS = frozenset({"gross_margin_trend", "accruals_ratio", "diluted_share_count_yoy"})
+MULTIPLE_METRICS = frozenset({"cash_conversion", "net_debt_to_ebitda",
+                              "interest_coverage", "volume_ratio_20"})
+UNIT_LABELS = {
+    "USD/share": "美元/股",
+    "USD": "美元",
+    "percent": "%",
+    "percentage points": "个百分点",
+    "shares": "股",
+    "index (0-100)": "",
+    "ratio": "",
+}
+
 # The only fields each history-capable tool actually serves.  The model-facing
 # tool schema, the catalog text and ``history_view`` all read this mapping, so
 # the advertised enum cannot drift away from what dispatch accepts.
@@ -33,14 +64,58 @@ def history_field_help() -> str:
                      for tool, fields in TOOL_HISTORY_FIELDS.items())
 
 
-def display_value(value: object, unit: str) -> str | None:
-    """One display rule shared by model evidence and card rendering."""
+def display_value(value: object, unit: str, *, name: str | None = None) -> str | None:
+    """One display rule shared by model evidence and card rendering (number only)."""
     if value is None:
         return None
     number = Decimal(str(value))
-    places = 2 if unit in {"USD/share", "percent", "percentage points"} else 0 if unit == "shares" else 4
+    if name in PERCENT_METRICS:
+        number *= 100
+    places = _decimal_places(unit, name)
     quantized = number.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
     return f"{quantized:.{places}f}"
+
+
+def _decimal_places(unit: str, name: str | None) -> int:
+    if name in PERCENT_METRICS or name in MULTIPLE_METRICS:
+        return 2
+    if unit == "index (0-100)":
+        return 1
+    if unit in {"USD/share", "percent", "percentage points"}:
+        return 2
+    if unit == "shares":
+        return 0
+    return 4
+
+
+def display_text(value: object, unit: str, *, name: str | None = None) -> str | None:
+    """Card display: the shared number rule plus a Chinese unit.
+
+    The validator's naked-number check reads the same function, so a number the
+    card would show is a number the model may not type literally.
+    """
+    text = display_value(value, unit, name=name)
+    if text is None:
+        return None
+    if name in PERCENT_METRICS:
+        return f"{text}%"
+    if name in MULTIPLE_METRICS:
+        return f"{text} 倍"
+    label = UNIT_LABELS.get(unit, unit)
+    if not label:
+        return text
+    if label == "%":
+        return f"{text}%"
+    return f"{text} {label}"
+
+
+def display_label(name: str, date_or_period: str | None = None, *,
+                  multiple: bool = False) -> str:
+    """Chinese metric label; unknown names fall back to the raw name."""
+    label = METRIC_LABELS.get(name, name)
+    if multiple and date_or_period:
+        return f"{label}（财期截止 {date_or_period}）"
+    return label
 
 
 def _months_before(day: date, months: int) -> date:
@@ -196,16 +271,19 @@ def recompute_derived(snapshot: dict) -> list[dict]:
 
 def _shown(item: dict) -> dict:
     return {"fact_id": item["fact_id"], "name": item["name"],
-            "display": display_value(item["value"], item["unit"]), "unit": item["unit"],
-            "date_or_period": item["date_or_period"]}
+            "display": display_value(item["value"], item["unit"], name=item["name"]),
+            "unit": item["unit"], "date_or_period": item["date_or_period"]}
 
 
 def _record(snapshot: dict, tool: str, args: dict, envelope: dict) -> None:
     snapshot["calls"].append({"tool": tool, "args": args, "envelope": envelope})
 
 
-def prepare_evidence(ticker: str, as_of: str) -> tuple[dict, dict, str]:
-    """Prefetch the three defaults, then source rows needed for landmarks and YoY."""
+def prepare_evidence(ticker: str, as_of: str, *, horizon: str = "mid"
+                     ) -> tuple[dict, dict, str]:
+    """Prefetch the three defaults, the horizon's history tier, then source rows."""
+    if horizon not in HORIZON_RESOLUTIONS:
+        raise ValueError("unknown horizon")
     snapshot = capture_snapshot(ticker, as_of)
     price = snapshot["calls"][0]["envelope"]
     if price["status"] == "ok":
@@ -222,6 +300,8 @@ def prepare_evidence(ticker: str, as_of: str) -> tuple[dict, dict, str]:
     _record(snapshot, "get_fundamental_metrics_history", {"ticker": ticker, "as_of": as_of,
             "full_history": True}, financial)
     snapshot["derived_facts"] = recompute_derived(snapshot)
+    snapshot["requested_horizon"] = HORIZON_LABELS[horizon]
+    snapshot["horizon_resolution"] = HORIZON_RESOLUTIONS[horizon]
     snapshot["evidence_windows"] = [{"tool": "base_pack", "resolution": "latest_and_landmarks",
         "window_start": _price_rows(snapshot)[0]["date"] if _price_rows(snapshot) else None,
         "window_end": _price_rows(snapshot)[-1]["date"] if _price_rows(snapshot) else None,
@@ -229,6 +309,12 @@ def prepare_evidence(ticker: str, as_of: str) -> tuple[dict, dict, str]:
     index, conflicts = fact_index(snapshot)
     if conflicts:
         raise ValueError("conflicting tool facts")
+    tier = HORIZON_RESOLUTIONS[horizon]
+    tier_fields = list(TOOL_HISTORY_FIELDS["get_price_history"])
+    tier_view = history_view(snapshot, "get_price_history", tier, tier_fields)
+    _record(snapshot, "get_price_history_tier",
+            {"symbol": ticker, "as_of": as_of, "resolution": tier, "fields": tier_fields},
+            {**tier_view, "as_of": as_of})
     latest_indicator = snapshot["calls"][1]["envelope"].get("data") or {}
     ids = [price.get("fact_id")]
     ids += [metric.get("fact_id") for metric in (latest_indicator.get("latest") or {}).get("values", {}).values()]
@@ -253,6 +339,8 @@ def prepare_evidence(ticker: str, as_of: str) -> tuple[dict, dict, str]:
             ids.append(max(candidates, key=lambda item: item["period_end"])["fact_id"])
     shown = [_shown(index[fact_id]) for fact_id in dict.fromkeys(ids) if fact_id in index]
     base = {"ticker": ticker, "as_of": as_of, "facts": shown,
+            "horizon_history": {"resolution": tier,
+                                "rows": (tier_view.get("data") or {}).get("rows", [])},
             "truncated": False, "truncation_reason": None,
             "gaps": data_gaps(snapshot)}
     if len(json.dumps(base, ensure_ascii=False).encode()) > MAX_ENVELOPE_BYTES:

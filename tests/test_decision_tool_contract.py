@@ -203,7 +203,9 @@ def _legal_draft() -> dict:
             "action": "买入", "confidence": "中", "entry_range": [300, 320],
             "stop_loss": 290, "target_price": 400, "fact_ids": [price],
             "reasons": [{"text": "收盘价 {fact:" + price + "}", "fact_ids": [price]}],
-            "invalidations": [{"kind": "close_below", "price": 290, "text": "跌破止损位"}]}
+            "invalidations": [{"kind": "close_below", "price": 290, "text": "跌破止损位"}],
+            "stop_rationale": "跌破 {fact:" + price + "} 离场。",
+            "target_rationale": "上看 {fact:" + price + "} 上方。"}
 
 
 class ScriptedClient:

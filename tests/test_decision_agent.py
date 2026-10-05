@@ -57,7 +57,9 @@ def legal_draft():
             "stop_loss": 290, "target_price": 400, "fact_ids": [price, indicator],
             "reasons": [{"text": "收盘价 {fact:" + price + "}，RSI {fact:" + indicator + "}。",
                          "fact_ids": [price, indicator]}],
-            "invalidations": [{"kind": "close_below", "price": 290, "text": "收盘价跌破止损位"}]}
+            "invalidations": [{"kind": "close_below", "price": 290, "text": "收盘价跌破止损位"}],
+            "stop_rationale": "跌破 {fact:" + price + "} 离场。",
+            "target_rationale": "上看 {fact:" + indicator + "} 上方。"}
 
 
 @pytest.fixture
@@ -81,7 +83,7 @@ def test_normal_tool_loop_archives_valid_card_and_echoes_reasoning(legal_draft, 
         "get_price_history", "get_indicators", "get_fundamental_metrics"]
     assert len(result["snapshot"]["calls"]) == result["stats"]["prefetch_calls"] + 3
     assert [item["resolution"] for item in result["card"]["evidence_windows"]] == [
-        "latest_and_landmarks", "latest", "latest", "latest"]
+        "latest_and_landmarks", "monthly_2y", "latest", "latest", "latest"]
     assert "reasoning_content" in client.requests[1]["messages"][-4]
     assert [tool["function"]["name"] for tool in client.requests[0]["tools"]] == [
         "get_price_history", "get_indicators", "get_fundamental_metrics"]
@@ -266,7 +268,7 @@ def test_history_resolution_is_compact_and_recorded(legal_draft, offline, tmp_pa
     assert payload["data"]["resolution"] == "weekly_3m"
     assert 1 <= len(payload["data"]["rows"]) <= 15
     assert len(json.dumps(payload, ensure_ascii=False).encode()) <= 32768
-    assert result["card"]["evidence_windows"][1]["resolution"] == "weekly_3m"
+    assert result["card"]["evidence_windows"][-1]["resolution"] == "weekly_3m"
     assert read_card(tmp_path / "history.db", result["card_id"])["card"]["evidence_windows"] == result["card"]["evidence_windows"]
 
 
