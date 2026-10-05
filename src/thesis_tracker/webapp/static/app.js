@@ -120,9 +120,15 @@ function pageHead(title, meta) {
   ]);
 }
 
-function panelSection(title, children, note) {
+function panelSection(title, children, note, action) {
   return el("section", { class: "section" }, [
-    el("h2", { text: title }),
+    action
+      ? el("div", { class: "section-head" }, [
+        el("h2", { text: title }),
+        el("span", { class: "spacer" }),
+        action,
+      ])
+      : el("h2", { text: title }),
     note ? el("p", { class: "section-note", text: note }) : null,
     ...[].concat(children),
   ]);
@@ -338,6 +344,37 @@ function renderCell(period, className, ticker) {
 
 /* -------------------------------------------------------------- company */
 
+/* 一个公司页上的对话段：新建对话、历史列表、累计用量。 */
+function chatSection(page, host, conversations) {
+  const newButton = el("button", { type: "button", class: "primary", text: "新建对话" });
+  newButton.addEventListener("click", async () => {
+    newButton.disabled = true;
+    try {
+      const created = await api("/api/companies/conversations", {
+        method: "POST", body: JSON.stringify({ ticker: page.ticker }),
+      });
+      location.hash = `#/chat/${created.conversation.conversation_id}`;
+    } catch (error) {
+      newButton.disabled = false;
+      host.append(errorBox(error.message));
+    }
+  });
+  const rows = conversations.map((item) => el("tr", {}, [
+    el("td", {}, el("a", { href: `#/chat/${item.conversation_id}`, text: item.title })),
+    el("td", { text: String(item.messages_count) }),
+    el("td", { text: `${String(item.usage.levels.conversation.input_tokens)} / ${String(item.usage.levels.conversation.output_tokens)}` }),
+    el("td", { text: item.usage.levels.conversation.cost_text || "—" }),
+    el("td", { text: item.last_activity_at }),
+    el("td", {}, item.pending_proposal
+      ? el("span", { class: "tag", text: `待确认：${item.pending_proposal.horizon_label}` })
+      : el("span", { class: "section-note", text: "—" })),
+  ]));
+  return panelSection("对话", conversations.length
+    ? table([{ label: "标题" }, { label: "条数" }, { label: "输入 / 输出 token" },
+      { label: "费用" }, { label: "最近活动" }, { label: "待确认" }], rows)
+    : emptyBox("还没有对话。", "新建一个对话，只讨论这家公司。"), null, newButton);
+}
+
 async function viewCompany(host, ticker) {
   const page = await api(`/api/companies/${encodeURIComponent(ticker)}`);
   clear(host);
@@ -398,6 +435,14 @@ async function viewCompany(host, ticker) {
       { label: "事实编号" }, { label: "状态" }, { label: "算不出的原因" }],
     metricRows,
   ), `最新财期披露日 ${metrics.data_end_date || "—"}。`));
+
+  let conversations = [];
+  try {
+    conversations = (await api(`/api/companies/conversations?ticker=${encodeURIComponent(page.ticker)}`)).conversations;
+  } catch (error) {
+    conversations = [];
+  }
+  host.append(chatSection(page, host, conversations));
 
   const cards = page.cards;
   host.append(panelSection("建议卡", cards.length
@@ -861,6 +906,292 @@ async function viewJob(host, jobId) {
   document.title = "任务｜Thesis Tracker";
 }
 
+/* ---------------------------------------------------------------- chat */
+
+/* A conversation is a reading column beside the same evidence panel the card
+   page uses, so a reader learns one layout.  Nothing here formats a number:
+  每一段可见文字都来自服务端。 */
+
+function chatSegments(nodes, pick) {
+  return (nodes || []).map((segment) => {
+    if (segment.type === "text") return document.createTextNode(segment.visible);
+    if (segment.type === "card_link") {
+      return el("a", { class: "card-link", href: segment.href, text: segment.visible });
+    }
+    const button = el("button", {
+      type: "button", class: "fact-ref", translate: false,
+      title: `来源 ${segment.fact_id || segment.card_id || ""}`,
+      text: segment.visible,
+    });
+    button.addEventListener("click", () => pick(segment));
+    return button;
+  });
+}
+
+function toolPanel(view) {
+  if (!view.tool_summary) return null;
+  const details = el("details", { class: "tools" }, [
+    el("summary", { text: `${view.tool_summary.label}｜共 ${view.tool_summary.bytes} 字节` }),
+    el("ul", { class: "tool-list" }, view.tool_calls.map((call) => el("li", {}, [
+      el("span", { class: "mono", translate: false, text: call.tool }),
+      el("span", { text: `（${call.args_text}）` }),
+      el("span", { class: "tool-status", text: `${call.status_label}｜${call.bytes_text}` }),
+      call.reason ? el("span", { class: "explain", text: call.reason }) : null,
+    ]))),
+  ]);
+  return details;
+}
+
+function refusalBlock(rejected) {
+  return el("div", { class: "refusal", role: "status" }, [
+    el("p", { class: "refusal-head", text: rejected.headline }),
+    el("p", { class: "section-note", text:
+      `模型连续 ${String(rejected.attempt_count)} 稿都没有通过校验；`
+      + "草稿没有显示，下面是最后一稿的违规项。" }),
+    el("ul", { class: "violations" }, rejected.violations.map((violation) => el("li", {}, [
+      el("span", { class: "rule", text: `${violation.rule} ${violation.location}` }),
+      el("span", { text: `：${violation.message}` }),
+    ]))),
+  ]);
+}
+
+function messageBlock(view, pick) {
+  const body = [];
+  if (view.rejected) {
+    body.push(refusalBlock(view.rejected));
+  } else if (view.segments) {
+    body.push(el("p", { class: "message-text" }, chatSegments(view.segments, pick)));
+  } else {
+    body.push(el("p", { class: "message-text", text: view.text || "" }));
+  }
+  if (view.tool_summary) body.push(toolPanel(view));
+  if (view.usage_line) body.push(el("p", { class: "usage-line", text: view.usage_line }));
+  return el("article", { class: `message ${view.role}`, "data-message-id": view.message_id }, [
+    el("header", { class: "message-head" }, [
+      el("span", { class: "who", text: view.role_label }),
+      el("span", { class: "when", text: view.created_at }),
+    ]),
+    ...body,
+  ]);
+}
+
+function proposalPanel(proposal, host, conversationId) {
+  if (!proposal) return null;
+  const actions = [];
+  if (proposal.confirmable) {
+    actions.push(el("button", { type: "button", class: "primary", text: "确认生成" }));
+    actions.push(el("button", { type: "button", text: "忽略" }));
+  } else {
+    actions.push(el("span", { class: "section-note", text: `已处理：${proposal.status_label}` }));
+  }
+  const panel = el("section", { class: "proposal", "aria-label": "生成建议卡的提议" }, [
+    el("h2", { text: "AI 提议生成新的建议卡" }),
+    el("p", { class: "rows-line", text: `周期 ${proposal.horizon_label}｜${proposal.reason}` }),
+    el("p", { class: "section-note", text: proposal.estimate }),
+    el("div", { class: "proposal-actions" }, actions),
+  ]);
+  if (!proposal.confirmable) return panel;
+  const [confirm, dismiss] = actions;
+  confirm.addEventListener("click", async () => {
+    confirm.disabled = true;
+    dismiss.disabled = true;
+    try {
+      await api("/api/proposals/confirm", {
+        method: "POST",
+        body: JSON.stringify({ proposal_id: proposal.proposal_id }),
+      });
+      await viewChat(host, conversationId);
+    } catch (error) {
+      confirm.disabled = false;
+      dismiss.disabled = false;
+      panel.append(errorBox(error.message));
+    }
+  });
+  dismiss.addEventListener("click", async () => {
+    confirm.disabled = true;
+    dismiss.disabled = true;
+    try {
+      await api("/api/proposals/dismiss", {
+        method: "POST",
+        body: JSON.stringify({ proposal_id: proposal.proposal_id }),
+      });
+      await viewChat(host, conversationId);
+    } catch (error) {
+      confirm.disabled = false;
+      dismiss.disabled = false;
+      panel.append(errorBox(error.message));
+    }
+  });
+  return panel;
+}
+
+function usageTable(usage) {
+  const order = ["message", "conversation", "company", "today"];
+  return el("table", { class: "list usage-table" }, [
+    el("thead", {}, el("tr", {}, [
+      el("th", { scope: "col", text: "范围" }),
+      el("th", { scope: "col", class: "num", text: "输入" }),
+      el("th", { scope: "col", class: "num", text: "输出" }),
+      el("th", { scope: "col", class: "num", text: "缓存命中" }),
+      el("th", { scope: "col", text: "费用" }),
+    ])),
+    el("tbody", {}, order.filter((key) => usage.levels[key]).map((key) => {
+      const level = usage.levels[key];
+      const same = key === "message" && usage.levels.message.input_tokens === 0
+        && usage.levels.message.output_tokens === 0;
+      return same ? null : el("tr", {}, [
+        el("th", { scope: "row", text: level.scope }),
+        el("td", { class: "num", text: String(level.input_tokens) }),
+        el("td", { class: "num", text: String(level.output_tokens) }),
+        el("td", { class: "num", text: String(level.cache_hit_tokens) }),
+        el("td", { class: "cost", text: level.cost_text || "—" }),
+      ]);
+    })),
+  ]);
+}
+
+function composer(startup, host, conversationId) {
+  const input = el("textarea", {
+    class: "chat-input", rows: "3",
+    placeholder: "问这家公司的问题，例如：现在距离止损还有多远？",
+    "aria-label": "向这家公司提问",
+  });
+  const submit = el("button", { type: "button", class: "primary", text: "发送" });
+  const status = el("p", { class: "section-note", text: startup.billing_note });
+  const form = el("div", { class: "composer" }, [
+    input,
+    el("div", { class: "composer-row" }, [
+      el("span", { class: "section-note", text: `每条最多 ${String(startup.max_message_chars)} 字` }),
+      el("span", { class: "spacer" }),
+      submit,
+    ]),
+    status,
+  ]);
+  const send = async () => {
+    const text = input.value.trim();
+    if (!text || submit.disabled) return;
+    submit.disabled = true;
+    input.disabled = true;
+    status.textContent = "已发送，正在回答…";
+    try {
+      await api(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
+        method: "POST", body: JSON.stringify({ text }),
+      });
+      input.value = "";
+      await viewChat(host, conversationId);
+    } catch (error) {
+      submit.disabled = false;
+      input.disabled = false;
+      status.textContent = startup.billing_note;
+      form.append(errorBox(error.message));
+    }
+  };
+  submit.addEventListener("click", send);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      send();
+    }
+  });
+  return form;
+}
+
+async function viewChat(host, conversationId) {
+  const page = await api(`/api/conversations/${encodeURIComponent(conversationId)}`);
+  clear(host);
+  const rows = new Map();
+  const pick = (segment) => {
+    const key = segment.fact_id || `card|${segment.card_id}`;
+    const row = rows.get(key) || rows.get(segment.fact_id);
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.focus({ preventScroll: true });
+    row.classList.remove("flash");
+    void row.offsetWidth;
+    row.classList.add("flash");
+  };
+
+  const startup = page.startup;
+  const reading = el("div", { class: "reading" }, [
+    el("p", { class: "section-note", text: startup.data_note }),
+    ...(page.messages.length
+      ? page.messages.map((message) => messageBlock(message, pick))
+      : [emptyBox("还没有对话内容。", "下面是几个可以直接点的问题。")]),
+    page.messages.length
+      ? null
+      : el("div", { class: "chips" }, startup.hint_chips.map((chip) => {
+        const button = el("button", { type: "button", class: "chip", text: chip });
+        button.addEventListener("click", () => {
+          const input = host.querySelector(".chat-input");
+          if (!input) return;
+          input.value = chip;
+          input.focus();
+        });
+        return button;
+      })),
+    proposalPanel(page.pending_proposal, host, conversationId),
+    page.messages.length < startup.history_window
+      ? null
+      : el("p", { class: "section-note", text: page.history.note }),
+    composer(startup, host, conversationId),
+    el("details", { class: "usage" }, [
+      el("summary", { text: "用量与费用" }),
+      usageTable(page.usage),
+      el("p", { class: "section-note", text: page.usage.price_note }),
+    ]),
+  ]);
+
+  const groups = page.evidence.groups;
+  const evidenceBody = el("div", { class: "evidence-scroll" },
+    groups.length
+      ? groups.map((group) => el("section", { class: "fact-group" }, [
+        el("h3", { text: `${group.label}（${String(group.count)}）` }),
+        ...group.facts.map((fact) => {
+          const row = el("div", {
+            class: `fact-row${fact.category === "card" ? " from-card" : ""}`,
+            tabindex: "-1",
+            "data-fact-id": fact.fact_id,
+            title: `来源 ${fact.fact_id}`,
+          }, [
+            el("div", { class: "fact-head" }, [
+              el("span", { class: "fact-name", text: fact.label }),
+              el("span", { class: "fact-value", text: fact.display }),
+            ]),
+            el("div", { class: "fact-meta" }, [
+              el("span", { text: fact.source_label }),
+              el("span", { class: "fact-date", text: fact.date_or_period || "—" }),
+            ]),
+          ]);
+          rows.set(fact.fact_id, row);
+          return row;
+        }),
+      ]))
+      : [el("p", { class: "section-note", text: "这个对话还没有读过任何数据。" })]);
+
+  const cardPinned = page.pinned_card_id
+    ? el("p", { class: "section-note" }, [
+      el("span", { text: "从这张卡开始：" }),
+      el("a", { href: `#/cards/${page.pinned_card_id}`, text: page.pinned_card_id_short }),
+    ])
+    : null;
+
+  host.append(
+    pageHead(`${page.ticker} 对话`, `创建于 ${page.created_at}｜最近活动 ${page.last_activity_at}`),
+    el("div", { class: "toolbar" }, [
+      el("a", { class: "back", href: `#/company/${page.ticker}`, text: `返回 ${page.ticker}` }),
+      cardPinned,
+    ]),
+    el("div", { class: "card-layout" }, [
+      reading,
+      el("aside", { class: "evidence", "aria-label": "本对话的证据" }, [
+        el("h2", { text: `证据（${String(page.evidence.count)} 条）` }),
+        evidenceBody,
+      ]),
+    ]),
+  );
+  document.title = `${page.ticker} 对话｜Thesis Tracker`;
+}
+
 /* -------------------------------------------------------------- routing */
 
 const NAV = [
@@ -905,6 +1236,7 @@ async function route() {
     if (head === "company" && tail) await viewCompany(host, decodeURIComponent(tail));
     else if (head === "cards" && tail) await viewCard(host, decodeURIComponent(tail));
     else if (head === "cards") await viewCards(host, query);
+    else if (head === "chat" && tail) await viewChat(host, decodeURIComponent(tail));
     else if (head === "jobs" && tail) await viewJob(host, decodeURIComponent(tail));
     else if (head === "jobs") await viewJobs(host);
     else await viewOverview(host);

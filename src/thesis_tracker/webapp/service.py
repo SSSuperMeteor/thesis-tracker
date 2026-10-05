@@ -37,11 +37,17 @@ SOURCE_LABELS = {
     "sec_filing_xbrl": "SEC 财报",
     "tiingo": "行情",
     "derived": "派生计算",
+    "decision_archive": "建议卡（AI 判断）",
 }
+# Units whose value is text rather than a number.  A card's judgment fields
+# (action, tendency, horizon, creation time) are citable facts, but they are not
+# measurements, so the numeric display rule does not apply to them: running a
+# Decimal conversion over "分批" raises rather than formatting.
+TEXT_UNITS = frozenset({"text"})
 # Derived facts group last; the other two follow the order a reader checks them.
 FACT_GROUP_LABELS = {"market": "行情与指标", "fundamental": "财报指标",
-                     "derived": "派生"}
-FACT_GROUP_ORDER = ("market", "fundamental", "derived")
+                     "derived": "派生", "card": "建议卡（AI 判断）"}
+FACT_GROUP_ORDER = ("market", "fundamental", "derived", "card")
 
 # The eight deterministic Stage 3 metrics, in the order their own module lists
 # them.  Labels and units come from decision.evidence, never from this file.
@@ -471,6 +477,10 @@ def _card_json(row: dict) -> dict:
 def source_label(source: dict | None) -> str:
     """Short human label for where a fact came from."""
     source = source or {}
+    if source.get("provider") == "decision_archive":
+        # A card's own judgment field: not a company fact, and it must say so
+        # wherever it appears rather than reading like market data.
+        return SOURCE_LABELS["decision_archive"]
     if source.get("formula"):
         return SOURCE_LABELS["derived"]
     provider = source.get("provider")
@@ -489,8 +499,59 @@ def group_facts(facts: list[dict]) -> list[dict]:
     grouped: dict[str, list[dict]] = {}
     for fact in facts:
         grouped.setdefault(fact.get("category") or "market", []).append(fact)
-    return [{"key": key, "label": FACT_GROUP_LABELS[key], "facts": grouped[key]}
+    return [{"key": key, "label": FACT_GROUP_LABELS[key], "facts": grouped[key],
+             "count": len(grouped[key])}
             for key in FACT_GROUP_ORDER if key in grouped]
+
+
+def fact_rows(facts: list[dict]) -> list[dict]:
+    """Evidence rows as the pages show them.
+
+    This is the one place a fact becomes a label plus a displayed value, so the
+    card page and the chat page can never disagree about how a number reads.
+    """
+    from thesis_tracker.decision.evidence import fact_category
+
+    occurrences: dict[str, int] = {}
+    for item in facts:
+        occurrences[item["name"]] = occurrences.get(item["name"], 0) + 1
+    rows = []
+    for item in facts:
+        source = item.get("source") or {}
+        category = item.get("category") or fact_category(item)
+        rows.append({
+            "fact_id": item["fact_id"],
+            "fact_id_short": short_fact_id(item["fact_id"]),
+            "name": item["name"],
+            # A card's judgment fields carry their own label because their name
+            # is a field key ("action"), not a metric name.  Everything else is
+            # resolved here and never trusted from the stored copy: an id may
+            # outlive a label, and a raw "close" must never reach the page.
+            "label": (item["label"] if category == "card" and item.get("label")
+                      else display_label(
+                          item["name"], item.get("date_or_period"),
+                          multiple=occurrences[item["name"]] > 1,
+                          category=None if category == "card" else category)),
+            # Numeric values are always recomputed, never taken from the stored
+            # copy: the card renderer recomputes them too, and the two must
+            # produce identical text for the page to match the archived card byte
+            # for byte.  Text-valued facts carry their own already-formatted
+            # display, because there is no number to format.
+            "display": (item.get("display") if item.get("unit") in TEXT_UNITS
+                        else display_text(item["value"], item["unit"],
+                                          name=item["name"])),
+            "value": str(item["value"]),
+            "unit": item["unit"],
+            "date_or_period": item.get("date_or_period"),
+            "category": category,
+            "source_label": source_label(source),
+            "provider": source.get("provider"),
+            "formula": source.get("formula"),
+            "source_fact_ids": source.get("source_fact_ids") or [],
+            "card_id": item.get("card_id"),
+            "annotation": item.get("annotation"),
+        })
+    return rows
 
 
 def _atr_value(index: dict[str, dict] | None, facts: list[dict]) -> Decimal | None:
@@ -779,32 +840,7 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
     card = _card_json(row)
     snapshot = json.loads(row["snapshot_json"])
     index, conflicts = fact_index(snapshot)
-    occurrences: dict[str, int] = {}
-    for item in card["facts"]:
-        occurrences[item["name"]] = occurrences.get(item["name"], 0) + 1
-
-    from thesis_tracker.decision.evidence import fact_category
-
-    facts = []
-    for item in card["facts"]:
-        source = item.get("source") or {}
-        facts.append({
-            "fact_id": item["fact_id"],
-            "fact_id_short": short_fact_id(item["fact_id"]),
-            "name": item["name"],
-            "label": display_label(item["name"], item.get("date_or_period"),
-                                   multiple=occurrences[item["name"]] > 1,
-                                   category=fact_category(item)),
-            "display": display_text(item["value"], item["unit"], name=item["name"]),
-            "value": str(item["value"]),
-            "unit": item["unit"],
-            "date_or_period": item.get("date_or_period"),
-            "category": fact_category(item),
-            "source_label": source_label(source),
-            "provider": source.get("provider"),
-            "formula": source.get("formula"),
-            "source_fact_ids": source.get("source_fact_ids") or [],
-        })
+    facts = fact_rows(card["facts"])
 
     invalidations = []
     for item in card["invalidations"]:

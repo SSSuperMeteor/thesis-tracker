@@ -38,10 +38,22 @@ if (!cardId) {
   const payload = await response.json();
   cardId = payload.cards[0].card_id;
 }
+let conversationId = args.conversation || null;
+if (!conversationId) {
+  try {
+    const response = await fetch(
+      `${BASE}/api/companies/conversations?ticker=${args.ticker || "AAPL"}&token=${TOKEN}`,
+      { headers: { Host: `127.0.0.1:${PORT}` } });
+    const payload = await response.json();
+    conversationId = payload.conversations.length ? payload.conversations[0].conversation_id : null;
+  } catch { conversationId = null; }
+}
 const pages = [
   { name: "overview", hash: "/overview" },
   { name: "cards", hash: "/cards" },
   { name: "card", hash: `/cards/${cardId}` },
+  { name: "company", hash: `/company/${args.ticker || "AAPL"}` },
+  ...(conversationId ? [{ name: "chat", hash: `/chat/${conversationId}` }] : []),
   { name: "jobs", hash: "/jobs" },
 ];
 console.log(`port=${PORT} card=${cardId}`);
@@ -68,9 +80,15 @@ async function goto(page, hash) {
 }
 
 // ---- 1. the two columns are one group, tightly spaced ----------------------
+// The card page and the chat page share the layout, so both are measured.
+const TWO_COLUMN_PAGES = [
+  { name: "card", hash: `/cards/${cardId}` },
+  ...(conversationId ? [{ name: "chat", hash: `/chat/${conversationId}` }] : []),
+];
 for (const scheme of ["light", "dark"]) {
+for (const target of TWO_COLUMN_PAGES) {
   const { context, page, console_errors } = await open(scheme, { width: 1440, height: 900 });
-  await goto(page, `/cards/${cardId}`);
+  await goto(page, target.hash);
   const gap = await page.evaluate(() => {
     const reading = document.querySelector(".reading");
     const evidence = document.querySelector(".evidence");
@@ -82,25 +100,58 @@ for (const scheme of ["light", "dark"]) {
       left: Math.round(a.left), right: Math.round(b.right),
       width: Math.round(group.width) };
   });
-  if (gap === null) failures.push({ check: "two-column gap", scheme, reason: "no columns" });
+  if (gap === null) failures.push({ check: "two-column gap", scheme,
+    page: target.name, reason: "no columns" });
   else {
-    if (gap.gap > MAX_GAP_PX) failures.push({ check: "two-column gap", scheme, gap });
-    console.log(`${gap.gap <= MAX_GAP_PX ? "OK  " : "FAIL"} ${scheme} 两栏空隙 ${gap.gap}px`
-      + `（左 ${gap.left}，右 ${gap.right}，整组 ${gap.width}px）`);
+    if (gap.gap > MAX_GAP_PX) failures.push({ check: "two-column gap", scheme,
+      page: target.name, gap });
+    console.log(`${gap.gap <= MAX_GAP_PX ? "OK  " : "FAIL"} ${scheme} ${target.name.padEnd(6)} `
+      + `两栏空隙 ${gap.gap}px（左 ${gap.left}，右 ${gap.right}，整组 ${gap.width}px）`);
   }
   // no date may wrap inside the panel
   const wrapped = await page.evaluate(() => Array.from(document.querySelectorAll(".fact-date"))
     .filter((node) => node.getClientRects().length > 1 ||
       node.scrollWidth > node.clientWidth + 1)
     .map((node) => node.textContent));
-  if (wrapped.length) failures.push({ check: "date wrap", scheme, wrapped });
-  console.log(`${wrapped.length ? "FAIL" : "OK  "} ${scheme} 证据面板日期换行数 ${wrapped.length}`);
+  if (wrapped.length) failures.push({ check: "date wrap", scheme, page: target.name,
+    wrapped });
+  console.log(`${wrapped.length ? "FAIL" : "OK  "} ${scheme} ${target.name.padEnd(6)} `
+    + `证据面板日期换行数 ${wrapped.length}`);
   const hintCount = await page.locator(".hints p").count();
   const groups = await page.locator(".fact-group").count();
   const rows = await page.locator(".fact-row").count();
-  console.log(`     提示 ${hintCount} 条｜来源分组 ${groups} 组｜事实行 ${rows} 行`);
-  if (console_errors.length) problems.push({ scheme, console_errors });
+  console.log(`     ${target.name} 提示 ${hintCount} 条｜来源分组 ${groups} 组｜事实行 ${rows} 行`);
+  if (target.name === "chat") {
+    // The message presentation must be structural: a tinted block for the
+    // reader's own turn, plain text for the answer, never bubbles or gradients.
+    const styles = await page.evaluate(() => {
+      const pick = (selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return null;
+        const css = getComputedStyle(node);
+        return { background: css.backgroundColor, radius: css.borderRadius,
+          shadow: css.boxShadow, gradient: css.backgroundImage.includes("gradient") };
+      };
+      return { user: pick(".message.user"), answer: pick(".message.assistant"),
+        evidence: pick(".evidence"), input: pick(".chat-input"),
+        refusal: pick(".refusal") };
+    });
+    if (!styles.user || !styles.answer) failures.push({ check: "chat messages", scheme });
+    else {
+      if (styles.user.gradient || styles.answer.gradient) {
+        failures.push({ check: "chat gradient", scheme, styles });
+      }
+      if (styles.user.background === styles.answer.background) {
+        failures.push({ check: "chat roles not differentiated", scheme, styles });
+      }
+      console.log(`     ${scheme} 我的方块底色 ${styles.user.background}｜`
+        + `回答底色 ${styles.answer.background}｜渐变 `
+        + `${styles.user.gradient || styles.answer.gradient ? "有" : "无"}`);
+    }
+  }
+  if (console_errors.length) problems.push({ scheme, page: target.name, console_errors });
   await context.close();
+}
 }
 
 // ---- 1b. band labels never overlap at any width ----------------------------

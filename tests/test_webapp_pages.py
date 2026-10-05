@@ -101,21 +101,39 @@ def test_the_read_only_endpoints_serve_the_fixture_data(server, fixture):
     assert status == 404
 
 
+# Endpoints the page only ever calls with POST.  A GET must answer 405, which is
+# what proves the route exists without pretending it is a read.
+POST_ONLY_LITERALS = {"/api/analyze", "/api/companies/conversations",
+                      "/api/proposals/confirm", "/api/proposals/dismiss"}
+# Literals that also need a parameter to answer; they are checked separately so
+# the loop below stays a plain "this route exists" check.
+LITERALS_NEEDING_A_TICKER = {"/api/companies/conversations"}
+
+
 def test_the_page_script_only_asks_for_endpoints_the_server_has(server):
     """Every URL the frontend builds must exist on the server.
 
-    The POST-only analysis endpoint answers a GET with 405, which proves the
-    route exists; anything else must be a real read endpoint, never a 404.
+    A POST-only endpoint answers a GET with 405, which proves the route exists;
+    anything else must be a real read endpoint, never a 404.  A literal whose
+    path carries an id is not in the script's fixed set, so this stays a check of
+    the routes the page names outright.
     """
     _, _, script = get(server, "/app.js")
     literals = set(re.findall(r'"(/api/[a-z/]*)"', script.decode()))
     assert "/api/overview" in literals and "/api/analyze" in literals
-    for literal in sorted(literals):
+    assert "/api/companies/conversations" in literals
+    for literal in sorted(literals - LITERALS_NEEDING_A_TICKER):
         status, _, _ = get(server, literal)
-        if literal == "/api/analyze":
+        if literal in POST_ONLY_LITERALS:
             assert status == 405, (literal, status)
         else:
             assert status == 200, (literal, status)
+    # The company conversation list is a real read once it knows the company,
+    # and a GET stays refused where only a POST is meaningful.
+    status, _, body = get(server, "/api/companies/conversations?ticker=AAPL")
+    assert status == 200 and json.loads(body)["ticker"] == "AAPL"
+    status, _, _ = get(server, "/api/companies/conversations")
+    assert status == 404  # no company named, so nothing to list
 
 
 def test_the_company_page_numbers_match_the_overview(server):

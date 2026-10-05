@@ -740,3 +740,156 @@ ol.steps .detail { font-variant-numeric: tabular-nums; }
   font-size: 13px;
   margin: 0 0 2px 0;
 }
+
+/* ---------------------------------------------------------------
+   chat: a conversation is a reading column beside the evidence panel.
+   User turns sit on a tinted block; answers are plain body text.  The
+   difference is structural, not a colour code: no bubbles, no gradients.
+   --------------------------------------------------------------- */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.section-head h2 { margin: 0; }
+.spacer { flex: 1 1 auto; }
+
+.message {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.message:last-of-type { border-bottom: 0; }
+.message-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.message-head .who { font-weight: 600; }
+.message-head .when { color: var(--ink-2); font-size: 12px; }
+.message.user {
+  background: var(--surface-2);
+  border-radius: var(--r-panel);
+  padding: 10px 12px;
+  border-bottom: 0;
+  margin-bottom: 8px;
+}
+.message.user .who { color: var(--ink-2); }
+.message.system {
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+}
+.message-text { margin: 0; white-space: pre-wrap; }
+.message .entry, .message .message-text { line-height: 1.6; }
+
+.usage-line {
+  margin: 6px 0 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.refusal {
+  border: 1px solid var(--bad);
+  border-radius: var(--r-panel);
+  padding: 10px 12px;
+  background: var(--surface);
+}
+.refusal-head { margin: 0 0 4px 0; color: var(--bad); font-weight: 600; }
+
+.tools { margin-top: 6px; }
+.tools > summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.tool-list {
+  margin: 6px 0 0 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.tool-list li { margin-bottom: 2px; }
+.tool-list .tool-status { margin-left: 6px; }
+.tool-list .explain { display: block; }
+
+.card-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.proposal {
+  border: 1px solid var(--ctl-rule);
+  border-radius: var(--r-panel);
+  padding: 12px;
+  background: var(--surface);
+  margin: 12px 0;
+}
+.proposal h2 { margin: 0 0 4px 0; }
+.proposal .rows-line { margin: 0 0 4px 0; }
+.proposal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.composer {
+  border: 1px solid var(--rule);
+  border-radius: var(--r-panel);
+  padding: 10px;
+  background: var(--surface);
+  margin-top: 12px;
+}
+.chat-input {
+  width: 100%;
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--ctl-rule);
+  border-radius: var(--r-ctl);
+  padding: 8px;
+  resize: vertical;
+}
+.chat-input:disabled { color: var(--ink-2); }
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.chip {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--ctl-rule);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.chip:hover { background: var(--accent-soft); }
+
+.usage { margin-top: 16px; }
+.usage > summary { cursor: pointer; color: var(--ink-2); }
+.usage-table { margin-top: 8px; }
+.usage-table .cost { color: var(--ink-2); font-size: 13px; }
+
+/* A card's judgment field is marked in the evidence panel: it is not a fact
+   about the company, and the row says so on its own. */
+.fact-row.from-card { border-left: 2px solid var(--accent); }
+
+.toolbar .back { color: var(--accent); text-decoration: none; }
+.toolbar .back:hover { text-decoration: underline; }
+
+.tag {
+  color: var(--ink-2);
+  font-size: 12px;
+}

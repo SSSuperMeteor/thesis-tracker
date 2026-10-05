@@ -161,9 +161,11 @@ def test_every_group_has_a_chinese_heading(detail):
     """No group may render an English key as its heading."""
     from thesis_tracker.webapp.service import FACT_GROUP_LABELS, FACT_GROUP_ORDER
 
+    # The card group only appears in the chat evidence panel: a card's own
+    # judgment fields are citable there, and they must not read like facts.
     assert FACT_GROUP_LABELS == {"market": "行情与指标", "fundamental": "财报指标",
-                                 "derived": "派生"}
-    assert FACT_GROUP_ORDER == ("market", "fundamental", "derived")
+                                 "derived": "派生", "card": "建议卡（AI 判断）"}
+    assert FACT_GROUP_ORDER == ("market", "fundamental", "derived", "card")
     for group in detail["fact_groups"]:
         assert group["label"] == FACT_GROUP_LABELS[group["key"]]
         assert group["key"] not in group["label"]

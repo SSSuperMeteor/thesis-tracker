@@ -11,11 +11,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from thesis_tracker.decision.evidence import HORIZON_LABELS
-from thesis_tracker.webapp import display
+from thesis_tracker.webapp import display, service
 from thesis_tracker.webapp.chat import PROMPT_VERSION
 from thesis_tracker.webapp.chat.context import HISTORY_NOTE, HISTORY_WINDOW
 from thesis_tracker.webapp.chat.pricing import cost_label, load_pricing
-from thesis_tracker.webapp.chat.proposals import card_summary
+from thesis_tracker.webapp.chat.proposals import card_summary, summary_text
 from thesis_tracker.webapp.chat.render import render_display
 from thesis_tracker.webapp.chat.tools import CARD_PRICE_FIELDS
 from thesis_tracker.webapp.chat.usage import analysis_average, usage_summary
@@ -38,6 +38,7 @@ def conversation_view(store, conversation: dict, *, job_store=None,
     view = {
         "conversation_id": conversation_id,
         "ticker": conversation["ticker"],
+        "messages_count": len(store.messages(conversation_id)),
         "title": store.conversation_title(conversation_id) or "新对话",
         "created_at": display.format_timestamp(conversation["created_at"]),
         "last_activity_at": display.format_timestamp(conversation["last_activity_at"]),
@@ -54,6 +55,7 @@ def conversation_view(store, conversation: dict, *, job_store=None,
                                               job_store=job_store,
                                               pricing_path=pricing_path)
                                 if pending else None)
+    view["evidence"] = evidence_view(store, conversation_id)
     if include_messages:
         messages = store.messages(conversation_id)
         view["messages"] = [message_view(item, store=store, pricing=pricing)
@@ -62,6 +64,20 @@ def conversation_view(store, conversation: dict, *, job_store=None,
         view["startup"] = startup_view(store, conversation, job_store=job_store,
                                        pricing_path=pricing_path)
     return view
+
+
+def evidence_view(store, conversation_id: str) -> dict:
+    """This conversation's evidence set, as the same rows the card page shows.
+
+    Grouping and labels come from :mod:`webapp.service`, so a fact reads the same
+    way wherever it appears; the page only renders what is here.
+    """
+    facts = list(store.facts(conversation_id).values())
+    rows = service.fact_rows(facts)
+    groups = service.group_facts(rows)
+    return {"groups": groups, "count": len(rows),
+            "note": ("这些是本对话工具返回过的事实、算出的派生事实，"
+                     "以及读过的建议卡里的判断。没有出现在这里的编号不能引用。")}
 
 
 def history_note(total: int) -> dict:
@@ -128,7 +144,11 @@ def message_view(message: dict, *, store, pricing=None) -> dict:
     # question, so an answer reports its own question's spend and lookups.
     billing_id = message.get("reply_to") or message_id
     level = message_usage(store.message_usage(billing_id), pricing=pricing)
-    tool_calls = store.tool_calls(billing_id)
+    # Lookups belong to the answer that made them, and they are audited against
+    # the question, so an answer reads them through its reply_to.  The question
+    # shows none: otherwise it would look as if the user's own words queried data.
+    tool_calls = (store.tool_calls(billing_id) if message["role"] == "assistant"
+                  else [])
     view = {
         "message_id": message_id,
         "reply_to": message.get("reply_to"),
@@ -153,10 +173,22 @@ def message_view(message: dict, *, store, pricing=None) -> dict:
 
 
 def segments_view(segments: list | None) -> list | None:
-    """Segments with their visible text resolved by the renderer."""
+    """Segments with their visible text resolved by the renderer.
+
+    A ``card_link`` segment is a system message's pointer to a generated card;
+    its visible text is the summary the same renderer family produces, so the
+    page never assembles a sentence with numbers in it.
+    """
     if segments is None:
         return None
-    return [{**item, "visible": render_display(item)} for item in segments]
+    views = []
+    for item in segments:
+        if item.get("type") == "card_link":
+            views.append({**item, "visible": summary_text(item),
+                          "href": f"#/cards/{item['card_id']}"})
+        else:
+            views.append({**item, "visible": render_display(item)})
+    return views
 
 
 def segments_card_link(segments: list | None) -> dict | None:
@@ -167,17 +199,23 @@ def segments_card_link(segments: list | None) -> dict | None:
 
 
 def rejected_view(rejected: dict | None) -> dict | None:
-    """A refusal: what was wrong, and nothing that looks like an answer."""
+    """A refusal: what was wrong, and nothing that looks like an answer.
+
+    Every draft is archived, but only the final one's violations are shown: the
+    three drafts of one turn usually break the same rule, and repeating it three
+    times buries the point.  The count says how many were refused.
+    """
     if rejected is None:
         return None
     attempts = rejected.get("attempts") or []
+    last = (attempts[-1].get("violations") if attempts
+            else rejected.get("violations")) or []
     return {
         "reason": rejected.get("reason"),
         "headline": "这条回答没有通过检查",
-        "violations": rejected.get("violations") or [],
-        "rules": sorted({item.get("rule") for item in (rejected.get("violations") or [])
-                         if item.get("rule")}),
-        "attempt_count": len(attempts),
+        "violations": last,
+        "rules": sorted({item.get("rule") for item in last if item.get("rule")}),
+        "attempt_count": len(attempts) or 1,
         "attempts": [{"index": index + 1,
                       "violations": attempt.get("violations") or []}
                      for index, attempt in enumerate(attempts)],

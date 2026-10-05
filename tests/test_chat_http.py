@@ -220,6 +220,9 @@ def test_a_turn_can_call_a_tool_and_cite_it(app):
     answer_view = state["messages"][-1]
     assert "美元/股" in answer_view["text"]
     assert answer_view["tool_summary"]["count"] == 1
+    # The question itself never claims to have looked anything up.
+    assert state["messages"][-2]["role"] == "user"
+    assert state["messages"][-2]["tool_summary"] is None
     assert answer_view["tool_summary"]["label"] == "查了 1 次数据"
     assert answer_view["tool_calls"][0]["tool"] == "get_price_history"
     assert answer_view["tool_calls"][0]["status_label"] == "成功"
@@ -527,3 +530,76 @@ def test_a_conversation_of_another_company_is_not_reachable_by_ticker(app):
     # The stored conversation is still the AAPL one.
     status, payload = get(app, f"/api/conversations/{conversation['conversation_id']}")
     assert payload["ticker"] == "AAPL"
+
+
+def test_a_text_valued_fact_does_not_break_the_evidence_panel(app, fixture):
+    """A card's action is a citable fact whose value is a word, not a number.
+
+    Rendering it with the numeric display rule raised, which turned a normal
+    conversation into a 500; this keeps that from coming back.
+    """
+    _ChatClient.replies = [
+        {"tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "get_card",
+                                      "arguments": json.dumps({"card_id": fixture.card_id})}}]},
+        {"content": "这张卡的动作我引用了。"},
+    ]
+    conversation = make_conversation(app, card_id=fixture.card_id)
+    post(app, f"/api/conversations/{conversation['conversation_id']}/messages",
+         {"text": "这张卡说了什么？"})
+    state = wait_for_turn(app, conversation["conversation_id"])
+    card_group = next(group for group in state["evidence"]["groups"]
+                      if group["key"] == "card")
+    labels = {fact["label"]: fact for fact in card_group["facts"]}
+    assert labels["动作"]["display"] == "分批"
+    assert labels["倾向"]["display"] == "看多"
+    assert labels["止损"]["display"].endswith("美元/股")
+    assert all(fact["source_label"] == "建议卡（AI 判断）"
+               for fact in card_group["facts"])
+
+
+def test_market_facts_are_labelled_in_chinese_even_from_a_stale_stored_copy(app):
+    """A raw fact name must never reach the page.
+
+    The evidence set is per conversation and outlives deploys, so a stored copy
+    may carry a label written by an older rule; the label is resolved on read
+    instead.  This is the defect that showed "close" and "rsi_14" in the panel.
+    """
+    _ChatClient.replies = [
+        {"tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "get_indicators",
+                                      "arguments": json.dumps({"ticker": "AAPL"})}}]},
+        {"content": "指标已经读到了。"},
+    ]
+    conversation = make_conversation(app)
+    # Make the stored copy carry the wrong label before the turn runs.
+    app.chat.add_facts(conversation["conversation_id"], [{
+        "fact_id": "tiingo|AAPL|2026-09-07|daily", "name": "close", "value": "1",
+        "unit": "USD/share", "display": "1.00 美元/股", "label": "close",
+        "date_or_period": "2026-09-07", "ticker": "AAPL", "category": "market",
+        "source": {"provider": "tiingo"}}])
+    post(app, f"/api/conversations/{conversation['conversation_id']}/messages",
+         {"text": "指标是多少？"})
+    state = wait_for_turn(app, conversation["conversation_id"])
+    labels = {fact["name"]: fact["label"] for group in state["evidence"]["groups"]
+              for fact in group["facts"]}
+    assert labels["close"] == "收盘价"
+    assert labels["rsi_14"] == "RSI"
+    assert all(name != label for name, label in labels.items() if name.isascii())
+
+
+def test_a_refusal_shows_the_last_drafts_violations_only(app):
+    """Three drafts usually break the same rule; the report must not repeat it."""
+    _ChatClient.replies = [{"content": "建议买入。"} for _ in range(6)]
+    conversation = make_conversation(app)
+    post(app, f"/api/conversations/{conversation['conversation_id']}/messages",
+         {"text": "现在能买吗？"})
+    state = wait_for_turn(app, conversation["conversation_id"])
+    entry = state["messages"][-1]
+    assert entry["rejected"]["attempt_count"] == 3
+    # Every attempt stays archived ...
+    assert len(entry["rejected"]["attempts"]) == 3
+    assert all(item["violations"] for item in entry["rejected"]["attempts"])
+    # ... but the reader sees one report, not three copies of it.
+    assert len(entry["rejected"]["violations"]) == 1
+    assert entry["rejected"]["rules"] == ["C02"]

@@ -570,7 +570,10 @@ def compile_facts(envelope: dict, *, tool: str, ticker: str) -> list[dict]:
 
     * ``get_price_history``: ``data.latest_close`` plus ``rows[]`` whose price
       cells are ``{value, unit, adjusted}`` and whose own ``fact_id`` identifies
-      the day's raw close;
+      the day's raw close.  Only the raw close becomes a fact: the card's own
+      derived convention numbers adjusted closes differently, so inventing an id
+      here would put two identifiers on one number and give the model something
+      to cite that no card can reproduce;
     * ``get_indicators``: ``data.latest = {date, values{}}`` plus ``rows[]`` of
       the same shape, each value carrying its own ``fact_id``;
     * ``get_fundamental_metrics``: ``data.metrics{name}`` each with ``fact_id``,
@@ -599,14 +602,11 @@ def compile_facts(envelope: dict, *, tool: str, ticker: str) -> list[dict]:
             add(envelope.get("fact_id"), "close", latest["value"],
                 latest.get("unit") or "USD/share", data.get("data_end_date"), "market")
         for row in data.get("rows") or []:
-            day = row.get("date")
-            for field in ("close", "adjusted_close"):
-                cell = row.get(field)
-                if not isinstance(cell, dict) or cell.get("value") is None:
-                    continue
-                add(row.get("fact_id") if field == "close"
-                    else f"{row.get('fact_id')}|{field}",
-                    field, cell["value"], cell.get("unit") or "USD/share", day, "market")
+            cell = row.get("close")
+            if not isinstance(cell, dict) or cell.get("value") is None:
+                continue
+            add(row.get("fact_id"), "close", cell["value"],
+                cell.get("unit") or "USD/share", row.get("date"), "market")
         return facts
 
     if tool == "get_indicators":
