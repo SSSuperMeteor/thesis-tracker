@@ -2,7 +2,8 @@
 
 ## 1. 范围与模型（已定，2026-10-04）
 
-`uv run analyze TICKER [--as-of YYYY-MM-DD]` 只分析一个标的；默认日期为运行当天。
+`uv run analyze TICKER [--as-of YYYY-MM-DD] [--horizon short|mid|long]` 只分析一个标的；
+默认日期为运行当天，默认周期 `mid`（2026-10-04 新增 `--horizon`）。
 模型仅为 DeepSeek，API 请求名固定 `deepseek-flash`。DeepSeek 的
 [模型与价格页](https://api-docs.deepseek.com/quick_start/pricing/)确认该名字指向
 DeepSeek-V4.1-Flash，旧名 `deepseek-v4-flash` 虽仍可请求，但模型已退役并路由到 V4.1。
@@ -26,6 +27,11 @@ resolution 与该工具支持的 fields。工具 schema 不含 `as_of`；若模�
 消息必须给出可操作提示（哪个参数、可选值是什么），不得终止整次分析。
 每次实际调用由 Python 注入本次 `as_of`。程序循环前预取三个工具的默认页，
 再按需取五年价格原始行和财务同比来源行；预取次数单独统计，不占模型的 12 次。
+（2026-10-04 核实：基础包本身不随周期变化，只有下面这个档位随周期变化。）
+除默认页外还按 `--horizon` 预取一个价格历史档位：`short`→`weekly_3m`、
+`mid`→`monthly_2y`、`long`→`quarterly_5y`，结果放进基础包的 `horizon_history`，
+并在 `snapshot.calls` 记一条 `get_price_history_tier`、在 `evidence_windows` 记一条同分辨率窗口；
+它计入预取次数，字节上限仍是 32 KiB。模型仍可请求其它档位。
 默认页、价格来源页及指标所选历史行的精确值与确定性派生事实进入 `EvidenceSnapshot`；模型只收到有编号的
 `base_pack` 和不含观测值的 `catalog`，之后收到至多 32 KiB 的精简工具视图。
 目录列所有指标、财务指标、定义、可用分辨率和约数 KB；基础包列最新价格、
@@ -37,10 +43,13 @@ resolution 与该工具支持的 fields。工具 schema 不含 `as_of`；若模�
 
 ## 3. 对话、修正与限额（已定）
 
-系统提示词版本 `decision-agent-v3-tool-contract-2026-10-04`（v2 → v3 只把
-"SPY 仅可用于默认最新页"写进提示词，未放宽任何校验规则）。模型须给明确倾向和动作，
+系统提示词版本 `decision-agent-v4-horizon-rules-2026-10-04`（v3 → v4 加入动作一致性、
+止损/目标依据、趋势描述需历史事实、周期侧重，并把 `entry_range` 的数组形状写进示例；
+未放宽任何校验规则）。模型须给明确倾向和动作，
 适用的买点、止损、目标位，至少一条可机器检查的收盘价失效条件；
 事实数字只通过 `fact_id` 和 `{fact:<id>}` 占位符表达。
+买入、分批、持有还须给出 `stop_rationale` 与 `target_rationale`（各含一个事实占位符）；
+中性倾向可用动作 `观望` 且三个价位留空。
 模型最终输出 JSON 草稿；Python 生成事实表、数据缺口、免责声明，再调用阶段一
 validator。JSON 解析或校验失败时，把全部 `rule`、`location`、中文说明反馈模型。
 最多修正 2 次；第三次失败即拒绝，不出卡。通过后才渲染中文卡并追加存档。
@@ -79,7 +88,8 @@ DeepSeek [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/) �
 
 通过的卡继续存入 `data/decisions/cards.db` 的 `decision_cards`，新增累计输入、输出、
 缓存命中 token 字段。`decision_attempts` 逐次追加原始模型最终输出、全部违规项、
-是否通过；`decision_model_calls` 逐轮追加请求/返回模型名、指纹和用量；
+是否通过，以及本次命令行请求的周期 `requested_horizon`（2026-10-04 新增列，
+旧库用 `ALTER TABLE` 补列，旧行该列为 NULL）；`decision_model_calls` 逐轮追加请求/返回模型名、指纹和用量；
 `decision_tool_calls` 记录每次模型工具请求名、参数和 envelope 状态，包括参数错误。
 卡的 `evidence_windows` 由 Python 记录基础包与实际请求的窗口、分辨率、字段和展示行数。
 四个表均用触发器禁止 `UPDATE`、`DELETE`，无 ORM 或独立迁移工具。
@@ -212,8 +222,58 @@ fixture `tests/fixtures/decision_baseline_2026-10-04.json`）：
 `eval/stage3_stress_8metric.json` sha256 仍为
 `d247434ddd8ed2086dda4a73cca51e5b7f144cf6e6d8d3a7bacfc446b3ffe237`。
 
-## 9. 后续待定（待定）
+## 9. 第三轮：三张真实卡的违规复核与规则加严（已定记录，2026-10-04）
+
+本轮**没有任何真实 API 调用**：Harness 环境读不到 `DEEPSEEK_API_KEY`，真实运行由用户
+在自己的终端执行。以下全部来自 `data/decisions/cards.db` 的存档记录与离线回放。
+
+### 9.1 三张真实卡的违规汇总（已定）
+
+三次真实分析各"修正 1 次"即通过。第一稿被拒的规则、位置与内容全部来自
+`decision_attempts.violations_json`：
+
+| 运行 | 标的 | 第一稿违规 |
+|---|---|---|
+| `48a9ff03` | AAPL | `D00 / entry_range`：买点须是两个价位或 null。实际写成 `{"low":326,"high":335}` 对象 |
+| `5fb24ad9` | NVDA | `D00 / entry_range`：同上，实际写成 `{"low":223.75,"high":236.0}` |
+| `ae4bccea` | TSLA | `D02` ×6：`reasons[0]` 事实数字未用占位符，`reasons[2]/[3]/[5]` 与 `invalidations[0]` 含裸数字，`invalidations[1]` 事实数字未用占位符；另 `D05 / entry_range/stop_loss/target_price`：持有须无买点区间（实际给了 `[347.5,365.0]`） |
+
+**反复违反的证据**：`entry_range` 形状在 3 次首稿里错了 2 次（AAPL、NVDA），
+所以 v4 提示词的 schema 示例把 `entry_range` 改成 `[300,320]` 数组形式并明确
+"不得写成对象"——这是本轮唯一针对违规证据的提示词改动。D02 只在 TSLA 一次出现
+（虽 6 处），证据不足以单独改提示词，只保留既有措辞。
+
+### 9.2 三张存档卡的 D11 回放（已定）
+
+用 `validate_card(..., version="decision-validator-1")` 回放，检查新规则 D11：
+
+| 卡 | 动作 | D11 | 命中位置与内容 |
+|---|---|---|---|
+| AAPL `68405fbc` | 买入 | **被拒**（符合预期） | `reasons[4].text`：动作词"分批"（"故采用分批建仓…"） |
+| NVDA `f904ecd9` | 买入 | **被拒**（符合预期） | `reasons[5].text`：动作词"分批"（"故采用分批而非一次性买入"） |
+| TSLA `241be83d` | 持有 | **不触发**（符合预期） | 理由正文无其它动作词；失效条件里的"转为回避""可上调为分批买入"不检查 |
+
+回放同时发现：三张 v1 卡在新显示规则下会额外报 `D01 / facts`，根因是**仅 `display`
+字符串变了**（旧卡用旧的显示函数写入）。逐项核对：**0 条事实的精确值或 `fact_id` 变化**，
+TSLA 卡 6 条事实的 `display` 不同（RSI 4→1 位、ratio 类改为 %/倍）。
+D01 不做放宽，因此"用新校验器全量重校旧卡"必然报这一条；这是显示规则变更的已知后果，
+不是数值问题。用 v1 版本回放则不触发 D12/D13。
+
+### 9.3 本轮加严的规则与显示（已定）
+
+D11（理由正文动作一致）、D12（止损/目标依据）、D13（周期一致）、动作 `观望`、
+校验器版本 `decision-validator-2`，以及单位中文化、指标中文名、比率类显示与
+"自动计算（Python）"一节，全部见 [decision-mode.md](decision-mode.md) 第 10、13 节。
+
+### 9.4 离线验收数字（2026-10-04）
+
+`pytest` 498 → **581 通过**，`ruff` 干净，stress runner 仍 580/952 = 60.9244%，
+`eval/stage3_stress_8metric.json` 的 sha256 仍为
+`d247434ddd8ed2086dda4a73cca51e5b7f144cf6e6d8d3a7bacfc446b3ffe237`。
+AAPL 57 / NVDA 58 个 `fact_id` 逐项不变、0 冲突。
+
+## 10. 后续待定（待定）
 
 后续真实验证需再次从 AAPL 开始：确认模型在 SPY/分档参数被拒后能改用目标 ticker 的
-分档请求，并跑完一轮出卡。本轮没有取得通过的真实卡，也没有真实 token 消耗。
+分档请求，并跑完一轮出卡；本轮没有取得通过的真实卡，也没有真实 token 消耗。
 到期评估与文本检索仍不在本轮实现范围。

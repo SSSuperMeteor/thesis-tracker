@@ -276,9 +276,9 @@
 底层三个工具的计算、精确值、现有 `fact_id`、resolver 与默认 envelope 不变。
 Decision Mode 在调用边界另造模型视图：每个可见数值事实给 `fact_id`、`display`、
 单位、日期或财期；完整精确值留在 `EvidenceSnapshot` 和卡的事实表，validator
-从快照重建并核对。显示格式与校验器渲染共用 `decision.evidence.display_value`：
-`USD/share`、百分比、百分点保留两位小数，`shares` 保留整数，其它单位保留四位；
-均用十进制 `ROUND_HALF_UP`，固定小数位。不能从 `display` 回推精确值。
+从快照重建并核对。显示格式与校验器渲染共用 `decision.evidence.display_value` /
+`display_text`（2026-10-04 起的完整规则见第 10 节）：数值一律用十进制
+`ROUND_HALF_UP`、固定小数位，不能从 `display` 回推精确值。
 
 派生事实使用 `derived|ticker|name|date|SHA256前20位`；哈希输入是
 `[ticker,name,精确值,date,公式,source_fact_ids]` 的紧凑 JSON。公式和来源行编号
@@ -293,3 +293,26 @@ Decision Mode 在调用边界另造模型视图：每个可见数值事实给 `f
 `resolution_required`。目录只列名字、定义、分辨率和估计字节数，不含观测值。
 依据：旧 100 行指标 envelope 713,471 字节；默认页 7,657 字节，
 本轮离线测量及 `tests/test_decision_evidence.py` 的字节、来源、显示回归测试。
+
+## 10. 显示规则（已定，2026-10-04）
+
+第 4 节要求"每个数字带单位和期间或日期"。落地方式是单一函数
+`evidence.display_text(value, unit, name=...)`，**卡的渲染与 D02 的裸数字检测共用它**：
+卡上会显示成什么样，模型就不能把那个数字写成裸文字（`50.06%`、`1.10 倍`、
+`333.69 美元/股` 都会被 D02 拒绝，除非写成 `{fact:<fact_id>}`）。
+
+| 规则 | 内容 |
+|---|---|
+| 单位中文化 | `USD/share`→`美元/股`；`percent`→`%`；`percentage points`→`个百分点`；`shares`→`股`；`USD`→`美元`；`index (0-100)`（RSI）不带单位、1 位小数；其它 unit 保留原文 |
+| 指标中文名 | 例如 `gross_margin_trend`→毛利率趋势、`accruals_ratio`→应计比率、`cash_conversion`→现金转换、`net_debt_to_ebitda`→净债务/EBITDA、`interest_coverage`→利息保障倍数、`diluted_share_count_yoy`→摊薄股本同比；未知名称回退原名 |
+| 百分比类 | 毛利率趋势、应计比率、摊薄股本同比：比例值 ×100，2 位小数，后缀 `%` |
+| 倍数类 | 现金转换、净债务/EBITDA、利息保障倍数、成交量比：2 位小数，后缀 ` 倍` |
+| 价格 | `USD/share` 2 位小数 |
+| 多财期 | 同一指标在一张卡里出现多个财期时，显示名后加 `（财期截止 YYYY-MM-DD）`，日期取自该事实自己的财期字段 |
+| 自动计算 | 卡额外渲染 `自动计算（Python）：` 一节（止损距离、目标距离、盈亏比、距 52 周高点）。**只是显示，不参与校验**，也不是 envelope 字段；缺输入显示 `无法计算（原因）` |
+
+**精确值与 `fact_id` 不变**：显示规则只改 `display` 字符串，`value`、`unit`、
+`fact_id` 与工具 envelope 的数值一律不动（2026-10-04 用三张存档卡逐项核对：0 条变化）。
+完整规则见 [decision-mode.md](decision-mode.md) 第 13 节；实现与测试见
+`decision/evidence.py`、`tests/test_decision_display.py`、
+`tests/test_decision_card_replay.py`。

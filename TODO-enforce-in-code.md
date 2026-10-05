@@ -95,6 +95,19 @@ discovery 层能不能拿到一个经过验证的真实 regression case。
 | 价位不自洽 | D05；`test_hold_and_avoid_price_rules`、对抗变异 |
 | 缺少数据缺口披露 | D06；对抗变异 |
 | 缺少机器可检查的失效条件 | D07；对抗变异、`test_every_invalidation_price_must_be_positive` |
+| 理由正文写了与动作不一致的动作词 | D11；`test_decision_card_rules.py` 的正反用例、否定放行、失效条件放行 |
+| 买入/分批/持有缺少止损或目标依据 | D12；`test_d12_requires_rationale_with_a_fact_placeholder` |
+| 卡片周期与命令行请求不一致 | D13；`test_d13_card_horizon_must_equal_the_requested_horizon` |
+| 观望动作的价位必须全空 | D05；`test_watch_with_prices_is_rejected`、配对矩阵 |
+
+## 尚未由代码强制（2026-10-04）
+
+以下约束目前无法机械判定，只能靠系统提示词约束（v4）。这是**已知缺口**，
+不是已完成项；等判定条件可规则化后再下沉进 validator。
+
+| 约束 | 为什么现在编码不了 | 提示词位置 |
+|---|---|---|
+| 趋势性描述（“转负”“放量”“持续”“走高”）必须有对应历史档位的事实支撑 | “趋势性”是语义判断，不是词表：同一个词在引用了历史序列的句子里合法，在只引用最新值的句子里就是过度推断。目前只能要求模型"引用了对应历史档位的事实时才可写"，由人审阅回放结果。可机器化的前提是先定出"哪些事实算历史档位事实"的封闭清单（`resolution` + `fields` + 展示行已由 `evidence_windows` 记录，这部分已经是代码可读的）。 | `decision.agent.SYSTEM_PROMPT`（v4）："趋势性描述…只有在引用了对应历史档位的事实后才可写，否则不要写。" |
 
 ## Agent 循环机械约束（已由代码强制，2026-10-04）
 
@@ -106,3 +119,8 @@ discovery 层能不能拿到一个经过验证的真实 regression case。
 
 真实 API 的三标的验证仍待定：2026-10-04 AAPL 首次调用已越过本轮 500k token
 总预算，因此本轮禁止继续调用 NVDA/TSLA。此为实测限制，不代表这些标的已验证。
+
+2026-10-04 第三轮补充：`analyze` 新增 `--horizon short|mid|long`（默认 `mid`），
+预取档位与卡片周期一致性由 D13 强制；校验器版本升到 `decision-validator-2`，
+旧卡用 `version="decision-validator-1"` 回放时跳过 D12/D13。当前预算口径是
+12 次工具调用 / 16 轮 / 1,500,000 token（软上限 1,000,000）。
