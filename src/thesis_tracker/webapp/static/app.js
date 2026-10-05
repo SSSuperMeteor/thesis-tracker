@@ -211,6 +211,15 @@ async function viewOverview(host) {
   const banner = priceBanner(overview);
   if (banner) host.append(banner);
 
+  const staleCount = Object.values(overview.companies)
+    .filter((company) => company.price.stale).length;
+  host.append(pageHead(
+    "总览",
+    `数据库里 ${String(Object.keys(overview.companies).length)} 家公司｜`
+    + `数据截至 ${overview.reference_date}｜价格过期阈值 ${String(overview.stale_after_days)} 天`
+    + (staleCount ? `｜${String(staleCount)} 家价格已过期` : ""),
+  ));
+
   const quarters = overview.quarters;
   const years = [];
   for (const key of quarters) {
@@ -219,22 +228,30 @@ async function viewOverview(host) {
     years[years.length - 1].quarters.push(key);
   }
 
-  const headCells = [el("th", { scope: "col", class: "stick", text: "公司" })];
+  // Two header rows: the year is written once per year, the quarter under it.
+  const yearCells = [el("th", { scope: "col", class: "stick", rowspan: "2", text: "公司" })];
+  const quarterCells = [];
   for (const group of years) {
     group.quarters.forEach((key, index) => {
-      headCells.push(el("th", {
-        scope: "col",
-        class: `qhead${index === 0 ? " year-start" : ""}`,
+      const classes = index === 0 ? "year-start" : "";
+      if (index === 0) {
+        yearCells.push(el("th", {
+          scope: "colgroup", colspan: String(group.quarters.length), class: `qhead ${classes}`,
+          title: `${group.year} 年（按财期截止日的日历季度）`,
+        }, el("span", { class: "year", text: group.year })));
+      }
+      quarterCells.push(el("th", {
+        scope: "col", class: `quarter-row ${classes}`,
         title: `${group.year} 年 ${key.slice(5)} 季度（按财期截止日的日历季度）`,
-      }, [
-        index === 0 ? el("span", { class: "year", text: group.year }) : null,
-        el("span", { class: "quarter", text: key.slice(5) }),
-      ]));
+      }, el("span", { class: "quarter", text: key.slice(5) })));
     });
   }
-  headCells.push(el("th", { scope: "col", class: "tail", text: "价格数据范围" }));
-  headCells.push(el("th", { scope: "col", class: "tail", text: "最新价格日" }));
-  headCells.push(el("th", { scope: "col", class: "tail num", text: "建议卡" }));
+  yearCells.push(el("th", { scope: "col", class: "tail", rowspan: "2", text: "价格数据范围" }));
+  yearCells.push(el("th", { scope: "col", class: "tail", rowspan: "2", text: "最新价格日" }));
+  yearCells.push(el("th", { scope: "col", class: "tail num", rowspan: "2", text: "建议卡" }));
+  // The summary columns have no calendar-quarter cell, so the quarter row ends
+  // with one empty cell per pinned column, which keeps the columns aligned.
+  const trailing = ["", "", ""].map(() => el("th", { scope: "col", class: "tail", "aria-hidden": "true" }));
 
   const body = [];
   for (const [ticker, company] of Object.entries(overview.companies)) {
@@ -267,7 +284,8 @@ async function viewOverview(host) {
     ]),
     el("div", { class: "table-scroll" }, [
       el("table", { class: "coverage" }, [
-        el("thead", {}, el("tr", {}, headCells)),
+        el("thead", {}, [el("tr", {}, yearCells),
+                         el("tr", {}, [...quarterCells, ...trailing])]),
         el("tbody", {}, body),
       ]),
     ]),
@@ -349,7 +367,7 @@ async function viewCompany(host, ticker) {
   ])));
 
   const metrics = page.fundamentals;
-  const rows = metrics.metrics.map((metric) => el("tr", {}, [
+  const metricRows = metrics.metrics.map((metric) => el("tr", {}, [
     el("th", { scope: "row", text: metric.label }),
     el("td", { class: "num" }, quantity(metric.display)),
     el("td", { class: "num", text: metric.period_end || "—" }),
@@ -360,7 +378,7 @@ async function viewCompany(host, ticker) {
   host.append(panelSection("可算的财务指标", table(
     [{ label: "指标" }, { label: "最新值", numeric: true }, { label: "财期截止", numeric: true },
       { label: "事实编号" }, { label: "状态" }, { label: "算不出的原因" }],
-    rows,
+    metricRows,
   ), `走现有 get_fundamental_metrics 只读路径；数据截至 ${metrics.data_end_date || "—"}。`));
 
   const cards = page.cards;
@@ -558,6 +576,10 @@ async function viewCard(host, cardId) {
   ]);
 
   const factsTable = el("table", { class: "evidence-table" }, [
+    el("colgroup", {}, [
+      el("col", { class: "c-fact" }), el("col", { class: "c-value" }),
+      el("col", { class: "c-date" }), el("col", { class: "c-src" }),
+    ]),
     el("thead", {}, el("tr", {}, [
       el("th", { scope: "col", text: "事实" }),
       el("th", { scope: "col", text: "值" }),
@@ -569,7 +591,10 @@ async function viewCard(host, cardId) {
         el("th", { scope: "row" }, [
           el("span", { text: fact.label }),
           el("br"),
-          el("span", { class: "src", translate: false, text: fact.fact_id }),
+          // The full identifier is long; the row keeps a short form and the
+          // complete id stays available in the title and in the highlight key.
+          el("span", { class: "fact-id src", translate: false, title: fact.fact_id,
+            text: `${fact.fact_id.slice(0, 12)}…${fact.fact_id.slice(-6)}` }),
         ]),
         el("td", { class: "num", text: fact.display }),
         el("td", { text: fact.date_or_period || "—" }),
@@ -617,23 +642,37 @@ function block(title, children, note) {
   ]);
 }
 
+/* The axis is inset by 4.5em on each side (see --band-inset), so a marker at
+ * 0% or 100% still has room for its label inside the column.  Both the
+ * percentage and the 0-1 fraction are computed by the backend; this only turns
+ * the fraction into a CSS length. */
+function markerOffset(fraction) {
+  return `left:calc(4.5em + (100% - 9em) * ${fraction})`;
+}
+
 function priceBand(band) {
   const marks = band.markers;
   const entry = marks.filter((mark) => mark.key.startsWith("entry_"));
-  const axis = el("div", { class: "band-axis" }, [
-    entry.length === 2
-      ? el("span", {
-        class: "band-range",
-        style: `left:${entry[0].position}%;right:${100 - entry[1].position}%`,
-      })
-      : null,
+  // The plot's height and the stacked label rows are the backend's geometry, in
+  // pixels; the label line box is fixed in CSS so the two agree exactly.
+  const plot = el("div", { class: "band-plot",
+    style: `height:${band.plot_height_px}px` }, [
+    el("div", { class: "band-axis" }, [
+      entry.length === 2
+        ? el("span", {
+          class: "band-range",
+          style: `${markerOffset(entry[0].fraction)};right:calc(4.5em + (100% - 9em) * ${1 - entry[1].fraction})`,
+        })
+        : null,
+    ]),
     ...marks.map((mark) => el("span", {
       class: `band-mark${mark.key.startsWith("entry_") ? " is-entry" : ""}`,
-      style: `left:${mark.position}%`,
+      style: `${markerOffset(mark.fraction)};--label-offset:${mark.label_offset_px || 0}px`,
     }, [
+      // Two block lines, no <br>: the stack's height must be exactly the two
+      // 16px line boxes the backend reserved for it.
       el("span", { class: "stack" }, [
         el("span", { class: "name", text: mark.label }),
-        el("br"),
         el("span", { class: "price", text: mark.value }),
       ]),
       el("span", { class: "tick" }),
@@ -641,7 +680,7 @@ function priceBand(band) {
   ]);
   return el("div", { class: "band" }, [
     el("p", { class: "section-note", text: "价位带（位置由后端按价格算出）" }),
-    axis,
+    plot,
   ]);
 }
 

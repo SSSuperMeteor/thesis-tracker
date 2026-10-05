@@ -322,19 +322,86 @@ def price_band(card: dict) -> dict | None:
     markers = []
     for key, label, value in ordered:
         position = Decimal(0) if span == 0 else (value - low) / span * 100
+        rounded = round(float(position), 2)
+        shown = display_text(value, "USD/share", name="close")
         markers.append({
             "key": key,
             "label": label,
-            "value": display_text(value, "USD/share", name="close"),
-            "position": round(float(position), 2),
+            "value": shown,
+            # Both the 0-100 percentage and the 0-1 fraction come from here, so
+            # the page only formats them into a CSS length.
+            "position": rounded,
+            "fraction": round(rounded / 100, 4),
+            # Which stacked label row this marker's text goes on.  Prices can sit
+            # a fraction of a percent apart, so the row is decided here where the
+            # axis width and the label widths are both known.
+            "label_row": 0,
         })
+    _place_labels(markers)
     return {
         "markers": markers,
+        # How much vertical room the stacked labels need; the page sizes the
+        # plot from this instead of guessing.
+        "label_rows": max((item["label_row"] for item in markers), default=0) + 1,
+        "label_row_px": BAND_ROW_PX,
+        "block_px": BAND_BLOCK_PX,
+        "tick_px": BAND_TICK_PX,
+        "tail_px": BAND_TAIL_PX,
+        "plot_height_px": (BAND_TICK_PX + BAND_BLOCK_PX
+                           + max((item["label_offset_px"] for item in markers), default=0)
+                           + BAND_TAIL_PX),
         "entry_low": display_text(_number(entry[0]), "USD/share", name="close")
         if isinstance(entry, list) and len(entry) == 2 else None,
         "entry_high": display_text(_number(entry[1]), "USD/share", name="close")
         if isinstance(entry, list) and len(entry) == 2 else None,
     }
+
+
+def _card_json(row: dict) -> dict:
+    import json
+
+    return json.loads(row["card_json"])
+
+
+# The band's axis is 9em narrower than its column (see --band-inset in app.css),
+# and 12px is a deliberately conservative advance width for one CJK character.
+BAND_COLUMN_PX = 366.0
+BAND_INSET_PX = 54.0
+BAND_CHAR_PX = 12.0
+# A label block is two lines of 12px text.  app.css pins the line box to 16px
+# (--band-line) precisely so this arithmetic is exact: two 16px lines are 32px,
+# and a 6px gap makes overlap between stacked rows impossible.
+BAND_BLOCK_PX = 32
+BAND_LINE_PX = 16
+BAND_ROW_PX = BAND_BLOCK_PX + 6
+# The tick sits 22px above the plot's bottom edge; both mirror --band-tick in
+# app.css.
+BAND_TICK_PX = 22
+BAND_TAIL_PX = 8
+
+
+def _place_labels(markers: list[dict]) -> None:
+    """Stack colliding band labels onto separate rows, left to right.
+
+    The band's own axis is 9em narrower than the column, so a marker at 0% or
+    100% still has room for its label; the numbers here are the ones the CSS
+    formula uses (see ``markerOffset`` in app.js and ``--band-inset``).
+    """
+    axis_px = max(1.0, BAND_COLUMN_PX - 2 * BAND_INSET_PX)
+    placed: dict[int, list[tuple[float, float]]] = {}
+    for marker in markers:
+        centre = (marker["position"] / 100) * axis_px
+        half = max(len(marker["label"]), len(marker["value"])) * BAND_CHAR_PX / 2
+        row = 0
+        while True:
+            occupied = placed.setdefault(row, [])
+            if all(centre - half > right + 6 or centre + half < left - 6
+                   for left, right in occupied):
+                occupied.append((centre - half, centre + half))
+                marker["label_row"] = row
+                break
+            row += 1
+        marker["label_offset_px"] = marker["label_row"] * BAND_ROW_PX
 
 
 def _card_json(row: dict) -> dict:
@@ -472,7 +539,11 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
             "explanation": _segments(item.get("text") or "", index),
         })
 
-    attempts = _attempts_for(card_db, row)
+    # Resolve which analysis run wrote this card, then show only that run's
+    # drafts: attempts from other analyses of the same ticker are not this
+    # card's history.
+    analysis_id = _owning_analysis(_attempts_for(card_db, row), row)
+    attempts = _attempts_for(card_db, row, analysis_id)
 
     return {
         "card_id": row["card_id"],
@@ -510,6 +581,7 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
                   "reason": item.get("reason")} for item in card.get("gaps") or []],
         "disclaimer": card.get("disclaimer"),
         "attempts": attempts,
+        "analysis_id": analysis_id,
         "versions": {
             "validator_version": row["validator_version"],
             "prompt_version": row["prompt_version"],
@@ -526,18 +598,36 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
     }
 
 
-def _attempts_for(card_db: Path | str, row: dict) -> list[dict]:
-    """Draft attempts for this card's ticker, including every rejected draft.
+def _owning_analysis(attempts: list[dict], row: dict) -> str | None:
+    """Which analysis run produced this card.
 
-    Rejected drafts are shown with their rule number and plain-Chinese message;
-    a card whose only attempt failed has no archive row at all, so the page
-    pairs this list with the card by ticker and as_of.
+    The archive stores no link from a card to its analysis, but the loop appends
+    the passing attempt immediately before it writes the card, so the newest
+    attempt at or before the card's creation time belongs to it.
+    """
+    candidates = [item for item in attempts
+                  if item["created_at"] <= row["created_at"] and item["passed"]]
+    return max(candidates, key=lambda item: item["created_at"])["analysis_id"] \
+        if candidates else None
+
+
+def _attempts_for(card_db: Path | str, row: dict, analysis_id: str | None = None
+                  ) -> list[dict]:
+    """Draft attempts of one analysis run, including every rejected draft.
+
+    Rejected drafts are shown with their rule number and plain-Chinese message.
+    Only the card's own run is listed: showing every attempt ever made for a
+    ticker would mix unrelated analyses into one card's history.
     """
     import json
 
     items = []
     for attempt in store.attempt_rows(card_db, ticker=row["ticker"]):
         if attempt["as_of"] != row["as_of"]:
+            continue
+        if analysis_id is not None and attempt["analysis_id"] != analysis_id:
+            continue
+        if analysis_id is None and not attempt["passed"]:
             continue
         violations = json.loads(attempt["violations_json"] or "[]")
         items.append({
@@ -550,4 +640,6 @@ def _attempts_for(card_db: Path | str, row: dict) -> list[dict]:
             "headline": ("通过校验并存档" if attempt["passed"]
                          else f"被拒绝：{len(violations)} 条规则违规"),
         })
+    # Reading order: first draft first.
+    items.sort(key=lambda item: (item["created_at"], item["attempt_no"]))
     return items

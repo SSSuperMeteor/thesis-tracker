@@ -242,7 +242,8 @@ table.coverage thead th {
   white-space: nowrap;
 }
 .qhead { padding: 4px 6px; text-align: left; }
-.qhead .year { color: var(--ink); font-weight: 600; font-size: 13px; margin-right: 4px; }
+.quarter-row th { padding: 2px 6px; }
+.qhead .year { color: var(--ink); font-weight: 600; font-size: 13px; }
 .qhead .quarter { font-size: 12px; }
 .year-start { border-left: 1px solid var(--ink-2) !important; }
 
@@ -287,7 +288,31 @@ thead .stick { z-index: 4; background: var(--surface-2); }
   border-radius: 0;
   vertical-align: middle;
 }
-.tail { padding: 0 10px !important; white-space: nowrap; color: var(--ink-2); }
+.tail {
+  padding: 0 10px !important;
+  white-space: nowrap;
+  color: var(--ink-2);
+  /* The three summary columns are pinned to the right edge of the scroll
+     container so the totals stay visible while the quarter columns scroll. */
+  position: sticky;
+  background: var(--surface);
+}
+table.coverage thead th { z-index: 3; }
+table.coverage thead .stick { z-index: 5; }
+table.coverage thead tr:first-child > *:nth-last-child(1),
+table.coverage thead tr:first-child > *:nth-last-child(2),
+table.coverage thead tr:first-child > *:nth-last-child(3) { z-index: 6; }
+/* The summary columns have no quarter cells, so they span both header rows. */
+table.coverage thead tr:nth-child(2) > th:empty { border: 0; background: var(--surface); }
+/* Widths are fixed so the three pinned columns can be offset by exactly the
+   width of their neighbours, and every cell is 1px wider than its box because
+   of the table's borders. */
+table.coverage tr > *:nth-last-child(1) { width: 52px; min-width: 52px; }
+table.coverage tr > *:nth-last-child(2) { width: 114px; min-width: 114px; }
+table.coverage tr > *:nth-last-child(3) { width: 236px; min-width: 236px; }
+table.coverage th:nth-last-child(1), table.coverage td:nth-last-child(1) { right: 0; z-index: 2; }
+table.coverage th:nth-last-child(2), table.coverage td:nth-last-child(2) { right: 53px; z-index: 2; }
+table.coverage th:nth-last-child(3), table.coverage td:nth-last-child(3) { right: 168px; z-index: 2; }
 .tail.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ---------------------------------------------------------------
@@ -305,19 +330,23 @@ thead .stick { z-index: 4; background: var(--surface-2); }
 }
 
 table.list {
-  width: 100%;
+  /* Size to the content, but never narrower than the container: columns keep
+     their natural width and the wrapper scrolls when the screen is narrow. */
+  width: max-content;
+  min-width: 100%;
   font-size: 13px;
   background: var(--surface);
-  border: 1px solid var(--rule);
-  border-radius: var(--r-panel);
-  overflow: hidden;
 }
+.table-scroll table.list { border: 0; border-radius: 0; }
 table.list th, table.list td {
   text-align: left;
   padding: 6px 10px;
   border-bottom: 1px solid var(--rule);
   line-height: 1.4;
+  white-space: nowrap;
 }
+/* Only the free-text reason column is allowed to wrap. */
+table.list td.reason { white-space: normal; min-width: 16em; }
 table.list thead th { background: var(--surface-2); color: var(--ink-2); font-weight: 400; }
 table.list tbody tr:last-child th, table.list tbody tr:last-child td { border-bottom: 0; }
 table.list td.num, table.list th.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -390,7 +419,16 @@ table.list [translate="no"] { translate: no; }
 }
 .evidence h2 { padding: 10px 12px; border-bottom: 1px solid var(--rule); }
 .evidence .table-scroll { border: 0; border-radius: 0; }
-table.evidence-table { width: 100%; font-size: 13px; }
+table.evidence-table { width: 100%; font-size: 13px; table-layout: fixed; }
+table.evidence-table col.c-fact { width: 42%; }
+table.evidence-table col.c-value { width: 26%; }
+table.evidence-table col.c-date { width: 17%; }
+table.evidence-table col.c-src { width: 15%; }
+table.evidence-table td.src, table.evidence-table .fact-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 table.evidence-table th, table.evidence-table td {
   text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--rule);
   vertical-align: top;
@@ -456,18 +494,67 @@ tr.flash { animation: fact-highlight 1.2s ease-out; }
    price band: a 1px axis with backend-positioned markers
    --------------------------------------------------------------- */
 .band { margin: 4px 0 8px 0; }
-.band-axis { position: relative; height: 1px; background: var(--rule); margin: 34px 0 26px 0; }
-.band-mark { position: absolute; top: 0; transform: translateX(-50%); text-align: center; }
-.band-mark .tick { width: 1px; height: 8px; background: var(--ink-2); margin: 0 auto; }
-.band-mark .name { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.band-plot {
+  --band-inset: 4.5em;
+  --band-tick: 22px;
+  --band-line: 16px;   /* two lines make the backend's BAND_BLOCK_PX */
+  position: relative;
+  /* Height is set inline from the backend's stacked-label geometry. */
+  margin: 0 var(--band-inset);
+}
+/* The axis is inset so the label above the first and last marker has room
+   inside the column instead of pushing the page wider. */
+.band-axis {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--band-tick, 22px);
+  height: 1px;
+  background: var(--rule);
+}
+.band-mark {
+  position: absolute;
+  bottom: var(--band-tick, 22px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.band-mark .tick { width: 1px; height: 8px; background: var(--ink-2); }
+.band-mark .name {
+  display: block;
+  font-size: 12px;
+  /* Explicit pixel line box: the backend reserves BAND_BLOCK_PX for exactly
+     two of these, so the stacked rows can never overlap. */
+  line-height: var(--band-line, 16px);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
 .band-mark .price {
-  font-size: 12px; color: var(--ink); white-space: nowrap;
+  display: block;
+  font-size: 12px;
+  line-height: var(--band-line, 16px);
+  color: var(--ink);
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.band-mark .stack { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); }
+/* Labels that would overlap on one line are stacked onto separate rows; the
+   row is decided by the backend, which knows both the axis width and the
+   label widths. */
+.band-mark .stack {
+  position: absolute;
+  bottom: calc(var(--band-tick, 22px) - 12px + var(--label-offset, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  /* Each label stays on one line: wrapping would make the block taller than
+     the row spacing the backend reserved for it. */
+  white-space: nowrap;
+  text-shadow: 0 0 var(--r-ctl) var(--surface), 0 0 var(--r-panel) var(--surface);
+}
 .band-mark.is-entry .tick { background: var(--accent); }
 .band-mark.is-entry .name { color: var(--accent); }
-.band-range { position: absolute; top: -1px; height: 3px; background: var(--accent); }
+.band-range { position: absolute; bottom: calc(var(--band-tick, 22px) - 1px); height: 3px; background: var(--accent); }
 
 /* ---------------------------------------------------------------
    dialogs, tasks, gaps, disclaimers

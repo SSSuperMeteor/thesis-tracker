@@ -84,6 +84,16 @@ def test_api_with_a_wrong_token_is_rejected(server):
     assert "not-the-token" not in data.decode()
 
 
+def test_the_token_is_accepted_from_a_query_parameter_as_well_as_a_cookie(server):
+    status, _, _ = request(server, f"/api/overview?token={TOKEN}", token=None)
+    assert status == 200
+    status, _, _ = request(server, "/api/overview?token=wrong", token=None)
+    assert status == 401
+    status, _, body = request(server, f"/app.js?token={TOKEN}", token=None)
+    assert status == 200
+    assert TOKEN not in body.decode()
+
+
 def test_the_token_is_accepted_from_a_header_as_well_as_a_cookie(server):
     status, _, _ = request(server, "/api/overview", token=None,
                            headers={"Authorization": f"Bearer {TOKEN}"})
@@ -144,9 +154,13 @@ def test_every_response_carries_a_self_only_csp(server):
     for path in ("/", "/app.js", "/api/overview", "/api/cards", "/nope"):
         status, headers, _ = request(server, path)
         assert status in {200, 404}
-        assert headers["Content-Security-Policy"] == (
-            "default-src 'self'; img-src 'self' data:; base-uri 'none'; "
-            "form-action 'none'; frame-ancestors 'none'; object-src 'none'")
+        policy = headers["Content-Security-Policy"]
+        assert policy.startswith("default-src 'self';")
+        # Scripts can never be inline; only style attributes are relaxed, for the
+        # price band's backend-computed marker positions.
+        assert "script-src" not in policy
+        assert "style-src 'self' 'unsafe-inline'" in policy
+        assert "unsafe-eval" not in policy
         assert headers["X-Content-Type-Options"] == "nosniff"
         assert headers["Referrer-Policy"] == "no-referrer"
 

@@ -164,6 +164,9 @@ def test_price_band_positions_are_ordered_like_the_prices(fixture, detail):
     assert positions == sorted(positions)
     assert positions[0] == 0.0 and positions[-1] == 100.0
     assert all(0.0 <= value <= 100.0 for value in positions)
+    # The CSS fraction is derived here, so the page never divides a number.
+    assert all(item["fraction"] == round(item["position"] / 100, 4) for item in markers)
+    assert all(0.0 <= item["fraction"] <= 1.0 for item in markers)
     assert band["entry_low"] == detail["entry_range"][0]
     assert band["entry_high"] == detail["entry_range"][1]
 
@@ -179,6 +182,14 @@ def test_an_action_without_prices_has_no_band(fixture, tmp_path):
     assert detail["price_band"] is not None
 
 
+def test_attempts_belong_to_the_card_own_analysis_not_other_runs(fixture, detail):
+    """A draft rejected by a different analysis of the same ticker is not this card's."""
+    assert detail["attempts"], "the card's own analysis drafted at least once"
+    assert {item["analysis_id"] for item in detail["attempts"]} == {detail["analysis_id"]}
+    assert detail["analysis_id"] == fixture.passed_analysis_id
+    assert fixture.rejected_analysis_id != detail["analysis_id"]
+
+
 def test_versions_and_rejected_attempts_are_exposed(fixture, detail):
     assert detail["versions"]["validator_version"] == "decision-validator-3"
     assert detail["versions"]["prompt_version"] == (
@@ -188,8 +199,9 @@ def test_versions_and_rejected_attempts_are_exposed(fixture, detail):
     assert detail["versions"]["snapshot_sha256"]
     assert detail["versions"]["validation_result"] == []
     assert detail["usage"]["input_tokens"] == 22262
+    assert [item["attempt_no"] for item in detail["attempts"]] == [1, 2]
     rejected = [item for item in detail["attempts"] if not item["passed"]]
-    assert rejected, "the fixture must archive a rejected draft"
+    assert len(rejected) == 1, "the fixture must archive a rejected draft"
     rules = [violation["rule"] for item in rejected for violation in item["violations"]]
     assert "D02" in rules and "D11" in rules
     for item in rejected:

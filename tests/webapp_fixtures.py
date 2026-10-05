@@ -147,6 +147,14 @@ REJECTED_RULES = (
 )
 
 CARD_CREATED_AT = "2026-10-05T00:44:06+00:00"
+# The card's own analysis drafted twice: the first pure-Python rules rejected the
+# draft, the second passed and was archived six seconds later.
+REJECTED_ATTEMPT_AT = "2026-10-05T00:43:50+00:00"
+PASSED_ATTEMPT_AT = "2026-10-05T00:44:00+00:00"
+# A separate later analysis of the same ticker, whose drafts must not show up in
+# this card's history.
+OTHER_ANALYSIS_AT = "2026-10-05T01:00:00+00:00"
+OTHER_ANALYSIS_ID = "d" * 36
 
 
 def guard_offline(monkeypatch):
@@ -397,20 +405,28 @@ def build_card_db(path: Path, *, price_db: Path, fact_db: Path) -> tuple[str, st
              "decision-agent-v5-entry-stop-rules-2026-10-04", 22262, 6415, 9344))
         connection.execute(
             "INSERT INTO decision_attempts VALUES (?,?,?,?,?,?,?,?,?,?)",
-            ("attempt-passed", passed_analysis, 1, ticker, FIXTURE_AS_OF,
-             json.dumps(draft, ensure_ascii=False), "[]", 1, CARD_CREATED_AT, "中期"))
+            ("attempt-rejected-first", passed_analysis, 1, ticker, FIXTURE_AS_OF,
+             json.dumps(draft, ensure_ascii=False),
+             json.dumps([{"rule": rule, "location": location, "message": message}
+                         for rule, location, message in REJECTED_RULES],
+                        ensure_ascii=False),
+             0, REJECTED_ATTEMPT_AT, "中期"))
+        connection.execute(
+            "INSERT INTO decision_attempts VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("attempt-passed", passed_analysis, 2, ticker, FIXTURE_AS_OF,
+             json.dumps(draft, ensure_ascii=False), "[]", 1, PASSED_ATTEMPT_AT, "中期"))
         connection.execute(
             "INSERT INTO decision_model_calls VALUES (?,?,?,?,?,?,?,?,?,?)",
             ("call-passed", passed_analysis, 1, "deepseek-flash", "deepseek-flash",
              None, 22262, 6415, 9344, CARD_CREATED_AT))
         connection.execute(
             "INSERT INTO decision_attempts VALUES (?,?,?,?,?,?,?,?,?,?)",
-            ("attempt-rejected", rejected_analysis, 1, ticker, FIXTURE_AS_OF,
+            ("attempt-other-analysis", rejected_analysis, 1, ticker, FIXTURE_AS_OF,
              json.dumps(draft, ensure_ascii=False),
              json.dumps([{"rule": rule, "location": location, "message": message}
                          for rule, location, message in REJECTED_RULES],
                         ensure_ascii=False),
-             0, "2026-10-05T00:50:00+00:00", "中期"))
+             0, OTHER_ANALYSIS_AT, "中期"))
     connection.close()
     return card_id, rejected_analysis, passed_analysis
 

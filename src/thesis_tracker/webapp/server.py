@@ -38,8 +38,12 @@ POST_ONLY_PATHS = frozenset({"/api/analyze"})
 COOKIE_NAME = "dsh_token"
 ALLOWED_HOSTS = ("127.0.0.1", "localhost")
 MAX_BODY_BYTES = 64 * 1024
-CSP = ("default-src 'self'; img-src 'self' data:; base-uri 'none'; "
-       "form-action 'none'; frame-ancestors 'none'; object-src 'none'")
+# No external resource may ever load: every fetch falls back to default-src
+# 'self'.  The one relaxation is inline *style* attributes, which the price band
+# needs to place backend-computed markers; scripts stay locked to 'self', so
+# 'unsafe-inline' here cannot execute anything.
+CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+       "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'")
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
                  ".ico": "image/x-icon"}
@@ -173,6 +177,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _token_valid(self, app) -> bool:
         supplied = _token_from_cookie(self.headers.get("Cookie"))
+        if supplied is None:
+            # ``?token=`` is the same channel as the startup URL, so a script or a
+            # manual curl can use it without a cookie jar.
+            supplied = _first(parse_qs(urlparse(self.path).query), "token")
         if supplied is None:
             header = self.headers.get("Authorization") or ""
             if header.startswith("Bearer "):
