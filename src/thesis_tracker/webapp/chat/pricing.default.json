@@ -1,0 +1,12 @@
+{
+  "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
+  "as_of_date": "2026-10-05",
+  "model": "deepseek-flash",
+  "input_per_million": 0.3,
+  "cache_hit_per_million": 0.006,
+  "output_per_million": 1.2,
+  "off_peak_input_per_million": 0.15,
+  "off_peak_cache_hit_per_million": 0.003,
+  "off_peak_output_per_million": 0.6,
+  "note": "Peak rates for deepseek-flash: the conservative upper bound, because off-peak is half of peak. Edit the local copy at data/webapp/pricing.json when DeepSeek changes its prices; that file wins over this template."
+}
