@@ -52,9 +52,8 @@ def test_wide_tables_scroll_inside_their_own_container():
 
 
 def test_the_reading_column_has_a_measure_and_the_evidence_column_collapses():
-    assert "max-width: 38em" in body(".reading")
     card_layout = body(".card-layout")
-    assert "grid-template-columns: minmax(0, 1fr) minmax(320px, 440px)" in card_layout
+    assert "grid-template-columns: minmax(0, 640px) minmax(300px, 440px)" in card_layout
     narrow = CSS[CSS.index("@media (max-width: 1099px)"):]
     assert "grid-template-columns: minmax(0, 1fr)" in narrow
     assert "position: static" in narrow or "position:static" in narrow
@@ -70,7 +69,10 @@ def test_sticky_positions_are_used_only_where_the_design_calls_for_them():
     """The header rows, the company column, three summary columns, the evidence panel."""
     sticky = set(re.findall(r"^([^{}]+?)\s*\{[^}]*position:\s*sticky", CSS, re.S | re.M))
     normalised = {selector.strip().split("\n")[-1].strip() for selector in sticky}
-    assert len(sticky) == 5, sticky
+    # Four: the sticky coverage header, the company column, the three pinned
+    # summary columns, and the evidence panel.  The evidence panel's own rows are
+    # no longer a table with a sticky head.
+    assert len(sticky) == 4, sticky
     assert any("thead th" in selector for selector in normalised)
     assert ".stick" in normalised and ".tail" in normalised and ".evidence" in normalised
     # The pinned summary columns are offset by their neighbours' widths.

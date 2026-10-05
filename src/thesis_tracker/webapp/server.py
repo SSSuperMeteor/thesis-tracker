@@ -249,14 +249,15 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(200, service.usage_average(app.card_db))
                 return
             if path == "/api/jobs":
-                self._json(200, {"jobs": app.store.list()})
+                self._json(200, {"jobs": [service.job_view(job)
+                                          for job in app.store.list()]})
                 return
             if path.startswith("/api/jobs/"):
                 job = app.store.get(unquote(path[len("/api/jobs/"):]))
                 if job is None:
                     self._json(404, {"error": "没有这个任务。"})
                     return
-                self._json(200, job)
+                self._json(200, service.job_view(job))
                 return
         except KeyError:
             self._json(404, {"error": "找不到请求的对象。"})

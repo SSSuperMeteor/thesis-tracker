@@ -8,6 +8,7 @@ recomputes a financial value, and nothing here writes to any database.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -23,6 +24,24 @@ from thesis_tracker.financial.pit_store import DEFAULT_FACT_DB
 from thesis_tracker.financial.tool import get_fundamental_metrics
 from thesis_tracker.prices import DEFAULT_DB as DEFAULT_PRICE_DB
 from thesis_tracker.webapp import data as store
+from thesis_tracker.webapp import display
+
+# Advisory thresholds for the card page's hint line.  These are heuristics,
+# not validated rules: they are shown next to the numbers, never fed back into
+# validation, and are expected to be revisited once expiry results exist.
+MIN_REWARD_RISK = 1.5
+MIN_STOP_ATR_MULTIPLE = 2.0
+
+# Where each kind of fact came from, in the words a reader uses.
+SOURCE_LABELS = {
+    "sec_filing_xbrl": "SEC 财报",
+    "tiingo": "行情",
+    "derived": "派生计算",
+}
+# Derived facts group last; the other two follow the order a reader checks them.
+FACT_GROUP_LABELS = {"market": "行情与指标", "fundamental": "财报指标",
+                     "derived": "派生"}
+FACT_GROUP_ORDER = ("market", "fundamental", "derived")
 
 # The eight deterministic Stage 3 metrics, in the order their own module lists
 # them.  Labels and units come from decision.evidence, never from this file.
@@ -160,6 +179,41 @@ def price_summary(price_db: Path | str, ticker: str, reference_date: str) -> dic
     }
 
 
+def price_overview(companies: dict[str, dict], reference: str) -> dict:
+    """One header line about price freshness across every company.
+
+    The date shown is the *oldest* of the companies' newest price dates, so a
+    single lagging company is visible instead of hidden behind the freshest one.
+    """
+    dated = [company["price"]["end_date"] for company in companies.values()
+             if company["price"].get("end_date")]
+    missing = sum(1 for company in companies.values()
+                  if not company["price"].get("end_date"))
+    if not dated:
+        return {"latest_price_date": None, "lag_days": None, "missing": missing,
+                "stale_after_days": PRICE_STALENESS_DAYS}
+    oldest = min(dated)
+    return {
+        "latest_price_date": oldest,
+        "lag_days": (date.fromisoformat(reference) - date.fromisoformat(oldest)).days,
+        "missing": missing,
+        "stale_after_days": PRICE_STALENESS_DAYS,
+    }
+
+
+def trim_quarters(quarters: list[str], companies: dict[str, dict]) -> list[str]:
+    """Drop leading columns no company has a filing in.
+
+    Only the leading edge is trimmed: a gap between two reported quarters is
+    real information about a company's filing history and stays visible.
+    """
+    filled = {key for company in companies.values() for key in company["periods"]}
+    start = 0
+    while start < len(quarters) and quarters[start] not in filled:
+        start += 1
+    return quarters[start:]
+
+
 def card_count(card_db: Path | str, ticker: str) -> int:
     return len(store.card_rows(card_db, ticker=ticker))
 
@@ -198,14 +252,15 @@ def overview(*, fact_db: Path | str = DEFAULT_FACT_DB,
             "price": price_summary(price_db, ticker, reference),
             "card_count": card_count(card_db, ticker),
         }
-    quarters = sorted({key for company in companies.values()
-                       for key in company["periods"]})
+    quarters = trim_quarters(sorted({key for company in companies.values()
+                                     for key in company["periods"]}), companies)
     return {
         "reference_date": reference,
         "stale_after_days": PRICE_STALENESS_DAYS,
         "price_command": "uv run prices-ingest",
         "quarters": quarters,
         "companies": companies,
+        "price_summary": price_overview(companies, reference),
     }
 
 
@@ -251,7 +306,14 @@ def filings(fact_db: Path | str, ticker: str) -> list[dict]:
 
 def card_list(*, card_db: Path | str = DEFAULT_ARCHIVE, ticker: str | None = None,
               horizon: str | None = None) -> list[dict]:
-    """Archived cards with the metadata the list page shows; never a model call."""
+    """Archived cards with the metadata the list page shows; never a model call.
+
+    Timestamps are formatted here and the two long version strings are reduced to
+    one short mark plus an "旧规则" flag, so the list page never renders a
+    timestamp or abbreviates a version itself.
+    """
+    from thesis_tracker.decision.agent import PROMPT_VERSION
+    from thesis_tracker.decision.core import VALIDATOR_VERSION
     from thesis_tracker.decision.evidence import HORIZON_LABELS
 
     reverse = {label: key for key, label in HORIZON_LABELS.items()}
@@ -260,11 +322,19 @@ def card_list(*, card_db: Path | str = DEFAULT_ARCHIVE, ticker: str | None = Non
         card = _card_json(row)
         if horizon is not None and card.get("horizon") != HORIZON_LABELS.get(horizon):
             continue
+        current = display.is_current_rules(row["prompt_version"], row["validator_version"],
+                                          current_validator=VALIDATOR_VERSION,
+                                          current_prompt=PROMPT_VERSION)
         items.append({
             "card_id": row["card_id"],
+            "card_id_short": row["card_id"][:8],
             "ticker": row["ticker"],
             "as_of": row["as_of"],
-            "created_at": row["created_at"],
+            "created_at": display.format_timestamp(row["created_at"]),
+            "version_mark": display.version_mark(row["prompt_version"],
+                                                 row["validator_version"]),
+            "rules_current": current,
+            "rules_label": None if current else "旧规则",
             "creation_price": display_text(card.get("creation_price"), "USD/share",
                                            name="close"),
             "horizon": card.get("horizon"),
@@ -301,37 +371,43 @@ def price_band(card: dict) -> dict | None:
     """
     if card.get("action") not in {"买入", "分批", "持有"}:
         return None
-    points: list[tuple[str, str, Decimal]] = []
+    # Each marker carries a shape as well as a position: the band must survive
+    # greyscale, so the closing price is a diamond while the levels are ticks.
+    points: list[tuple[str, str, str, Decimal]] = []
     entry = card.get("entry_range")
     if isinstance(entry, list) and len(entry) == 2:
         low, high = _number(entry[0]), _number(entry[1])
         if low is not None and high is not None:
-            points.append(("entry_low", "买点下沿", low))
-            points.append(("entry_high", "买点上沿", high))
-    for key, label in (("stop_loss", "止损"), ("creation_price", "收盘价"),
-                       ("target_price", "目标")):
+            points.append(("entry_low", "买点下沿", "entry", low))
+            points.append(("entry_high", "买点上沿", "entry", high))
+    for key, label, shape in (("stop_loss", "止损", "stop"),
+                              ("creation_price", "收盘价", "close"),
+                              ("target_price", "目标", "target")):
         value = _number(card.get(key))
         if value is not None:
-            points.append((key, label, value))
+            points.append((key, label, shape, value))
     if len(points) < 2:
         return None
-    ordered = sorted(points, key=lambda item: (item[2], item[0]))
-    low = min(item[2] for item in ordered)
-    high = max(item[2] for item in ordered)
+    ordered = sorted(points, key=lambda item: (item[3], item[0]))
+    low = min(item[3] for item in ordered)
+    high = max(item[3] for item in ordered)
     span = high - low
     markers = []
-    for key, label, value in ordered:
+    for key, label, shape, value in ordered:
         position = Decimal(0) if span == 0 else (value - low) / span * 100
         rounded = round(float(position), 2)
         shown = display_text(value, "USD/share", name="close")
         markers.append({
             "key": key,
             "label": label,
+            "shape": shape,
             "value": shown,
             # Both the 0-100 percentage and the 0-1 fraction come from here, so
             # the page only formats them into a CSS length.
             "position": rounded,
             "fraction": round(rounded / 100, 4),
+            # Ready to concatenate into a CSS length: no arithmetic on the page.
+            "percent": f"{Decimal(str(rounded)):.2f}",
             # Which stacked label row this marker's text goes on.  Prices can sit
             # a fraction of a percent apart, so the row is decided here where the
             # axis width and the label widths are both known.
@@ -340,6 +416,13 @@ def price_band(card: dict) -> dict | None:
     _place_labels(markers)
     return {
         "markers": markers,
+        # The shapes and what they mean, so the legend is not written twice.
+        "legend": [
+            {"shape": "stop", "label": "止损"},
+            {"shape": "range", "label": "买点区间"},
+            {"shape": "close", "label": "收盘价"},
+            {"shape": "target", "label": "目标"},
+        ],
         # How much vertical room the stacked labels need; the page sizes the
         # plot from this instead of guessing.
         "label_rows": max((item["label_row"] for item in markers), default=0) + 1,
@@ -354,6 +437,16 @@ def price_band(card: dict) -> dict | None:
         if isinstance(entry, list) and len(entry) == 2 else None,
         "entry_high": display_text(_number(entry[1]), "USD/share", name="close")
         if isinstance(entry, list) and len(entry) == 2 else None,
+        # The buy range as prepared CSS numbers: the page concatenates them and
+        # does no arithmetic of its own.
+        "range_left_percent": next((item["percent"] for item in markers
+                                    if item["key"] == "entry_low"), None),
+        "range_width_percent": (
+            f"{Decimal(str(next((item['percent'] for item in markers
+                                 if item['key'] == 'entry_high'), 0)))
+               - Decimal(str(next((item['percent'] for item in markers
+                                   if item['key'] == 'entry_low'), 0))):.2f}"
+            if any(item["key"] == "entry_low" for item in markers) else None),
     }
 
 
@@ -363,11 +456,111 @@ def _card_json(row: dict) -> dict:
     return json.loads(row["card_json"])
 
 
-# The band's axis is 9em narrower than its column (see --band-inset in app.css),
-# and 12px is a deliberately conservative advance width for one CJK character.
-BAND_COLUMN_PX = 366.0
-BAND_INSET_PX = 54.0
+def source_label(source: dict | None) -> str:
+    """Short human label for where a fact came from."""
+    source = source or {}
+    if source.get("formula"):
+        return SOURCE_LABELS["derived"]
+    provider = source.get("provider")
+    if provider in SOURCE_LABELS:
+        return SOURCE_LABELS[provider]
+    return provider or SOURCE_LABELS["derived"]
+
+
+def short_fact_id(fact_id: str) -> str:
+    """The eight leading characters, which is what the card shows."""
+    return str(fact_id)[:8]
+
+
+def group_facts(facts: list[dict]) -> list[dict]:
+    """Group evidence rows by where each fact came from."""
+    grouped: dict[str, list[dict]] = {}
+    for fact in facts:
+        grouped.setdefault(fact.get("category") or "market", []).append(fact)
+    return [{"key": key, "label": FACT_GROUP_LABELS[key], "facts": grouped[key]}
+            for key in FACT_GROUP_ORDER if key in grouped]
+
+
+def _atr_value(index: dict[str, dict] | None, facts: list[dict]) -> Decimal | None:
+    """ATR for the hint line.
+
+    The snapshot's fact index is the authority: a card only carries the facts it
+    cites, and ATR is usually not one of them, so reading the card's list alone
+    would silently disable the hint.
+    """
+    for item in (index or {}).values():
+        if item.get("name") == "atr_14" and item.get("value") is not None:
+            return _number(item["value"])
+    for fact in facts:
+        if fact.get("name") == "atr_14":
+            return _number(fact.get("value"))
+    return None
+
+
+def advice_hints(card: dict, facts: list[dict], *, index: dict[str, dict] | None = None,
+                 number=_number) -> list[str]:
+    """Advisory remarks shown beside the numbers, never part of validation.
+
+    Both thresholds are heuristics rather than facts about the security, so the
+    wording says what was measured and leaves the judgement to the reader.
+    """
+    if card.get("action") not in {"买入", "分批", "持有"}:
+        return []
+    entry = None
+    bounds = card.get("entry_range")
+    if card.get("action") in {"买入", "分批"} and isinstance(bounds, list) and len(bounds) == 2:
+        low, high = number(bounds[0]), number(bounds[1])
+        if low is not None and high is not None:
+            entry = (low + high) / 2
+    elif card.get("action") == "持有":
+        entry = number(card.get("creation_price"))
+    if entry is None or entry == 0:
+        return []
+    stop = number(card.get("stop_loss"))
+    target = number(card.get("target_price"))
+    hints: list[str] = []
+    if stop is not None and target is not None and entry != stop:
+        reward_risk = (target - entry) / (entry - stop)
+        if reward_risk < Decimal(str(MIN_REWARD_RISK)):
+            hints.append(f"盈亏比偏低：{reward_risk:.1f} : 1，"
+                         f"低于经验阈值 {MIN_REWARD_RISK:g}")
+    atr = _atr_value(index, facts)
+    if stop is not None and atr is not None and atr > 0:
+        multiple = (entry - stop) / atr
+        if multiple < Decimal(str(MIN_STOP_ATR_MULTIPLE)):
+            hints.append(f"止损距离只有 {multiple:.1f} 倍 ATR，"
+                         "正常波动就可能触发；这是经验阈值，还没有用到期结果检验过")
+    return hints
+
+
+def adjust_auto_computed(items: list[dict]) -> list[dict]:
+    """Shorten two auto-computed lines that repeat their own label.
+
+    ``core.auto_computed`` builds the text; the card page shows ``距52周高点``
+    above it, so the line only needs the measurement.  Only the rendered text
+    changes; the archived card and the exact values are untouched.
+    """
+    adjusted = []
+    for item in items:
+        text = item.get("text", "")
+        if item.get("label") == "距52周高点":
+            match = re.search(r"(低于|高于) 52 周高点 (.+)$", text)
+            if match:
+                text = f"{match.group(1)} {match.group(2)}"
+        elif item.get("label") == "盈亏比" and re.fullmatch(r"\d+(?:\.\d+)?", text.strip()):
+            text = f"{text.strip()} : 1"
+        adjusted.append({**item, "text": text})
+    return adjusted
+
+
+# The axis spans the reading column, whose width app.css fixes at 640px; 12px is
+# a deliberately conservative advance width for one CJK character.
+BAND_COLUMN_PX = 640.0
+BAND_INSET_PX = 0.0
 BAND_CHAR_PX = 12.0
+# Labels alternate above and below the axis, so only every second row shares a
+# side and the geometry is symmetric.
+BAND_SIDES = ("above", "below")
 # A label block is two lines of 12px text.  app.css pins the line box to 16px
 # (--band-line) precisely so this arithmetic is exact: two 16px lines are 32px,
 # and a 6px gap makes overlap between stacked rows impossible.
@@ -381,24 +574,28 @@ BAND_TAIL_PX = 8
 
 
 def _place_labels(markers: list[dict]) -> None:
-    """Stack colliding band labels onto separate rows, left to right.
+    """Place band labels so none overlaps another, alternating above and below.
 
-    The band's own axis is 9em narrower than the column, so a marker at 0% or
-    100% still has room for its label; the numbers here are the ones the CSS
-    formula uses (see ``markerOffset`` in app.js and ``--band-inset``).
+    Labels whose horizontal spans would collide are pushed to the next row on
+    the same side, and successive rows alternate sides.  The geometry is decided
+    here because only here are the axis width and the label widths both known;
+    the page converts the row index into a CSS length.
     """
     axis_px = max(1.0, BAND_COLUMN_PX - 2 * BAND_INSET_PX)
-    placed: dict[int, list[tuple[float, float]]] = {}
-    for marker in markers:
+    placed: dict[tuple[str, int], list[tuple[float, float]]] = {}
+    for index, marker in enumerate(markers):
         centre = (marker["position"] / 100) * axis_px
         half = max(len(marker["label"]), len(marker["value"])) * BAND_CHAR_PX / 2
         row = 0
         while True:
-            occupied = placed.setdefault(row, [])
+            side = BAND_SIDES[index % len(BAND_SIDES)] if row == 0 else (
+                BAND_SIDES[(index + row) % len(BAND_SIDES)])
+            occupied = placed.setdefault((side, row), [])
             if all(centre - half > right + 6 or centre + half < left - 6
                    for left, right in occupied):
                 occupied.append((centre - half, centre + half))
                 marker["label_row"] = row
+                marker["label_side"] = side
                 break
             row += 1
         marker["label_offset_px"] = marker["label_row"] * BAND_ROW_PX
@@ -430,6 +627,32 @@ def usage_average(card_db: Path | str = DEFAULT_ARCHIVE, *,
         "output_tokens": round(sum(row["output_tokens"] for row in rows) / count),
         "cache_hit_tokens": round(sum(row["cache_hit_tokens"] for row in rows) / count),
     }
+
+
+def job_view(job: dict) -> dict:
+    """A stored job with display strings attached.
+
+    Timestamps become local minute strings, the parameter dictionary becomes a
+    labelled Chinese line, and the progress events each gain a display time, so
+    the task page renders text and never formats anything itself.
+    """
+    result = job.get("result")
+    view = {
+        **job,
+        "created_at": display.format_timestamp(job.get("created_at")),
+        "started_at": display.format_timestamp(job.get("started_at")),
+        "finished_at": display.format_timestamp(job.get("finished_at")),
+        "parameters": display.parameter_labels(job.get("parameters") or {}),
+        "parameter_summary": display.parameter_summary(job.get("parameters") or {}),
+        "progress": [{**event, "at_display": display.format_timestamp(event.get("at"))}
+                     for event in job.get("progress") or []],
+    }
+    if isinstance(result, dict):
+        view["result"] = {
+            **result,
+            "card_id_short": (result["card_id"][:8] if result.get("card_id") else None),
+        }
+    return view
 
 
 def company_page(*, fact_db: Path | str = DEFAULT_FACT_DB,
@@ -511,6 +734,7 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
         source = item.get("source") or {}
         facts.append({
             "fact_id": item["fact_id"],
+            "fact_id_short": short_fact_id(item["fact_id"]),
             "name": item["name"],
             "label": display_label(item["name"], item.get("date_or_period"),
                                    multiple=occurrences[item["name"]] > 1,
@@ -519,6 +743,8 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
             "value": str(item["value"]),
             "unit": item["unit"],
             "date_or_period": item.get("date_or_period"),
+            "category": fact_category(item),
+            "source_label": source_label(source),
             "provider": source.get("provider"),
             "formula": source.get("formula"),
             "source_fact_ids": source.get("source_fact_ids") or [],
@@ -547,9 +773,10 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
 
     return {
         "card_id": row["card_id"],
+        "card_id_short": row["card_id"][:8],
         "ticker": row["ticker"],
         "as_of": row["as_of"],
-        "created_at": row["created_at"],
+        "created_at": display.format_timestamp(row["created_at"]),
         "horizon": card.get("horizon"),
         "bias": card.get("bias"),
         "action": card.get("action"),
@@ -574,7 +801,9 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
         "reasons": [_segments(item.get("text") or "", index)
                     for item in card.get("reasons") or []],
         "invalidations": invalidations,
-        "auto_computed": auto_computed(card, snapshot),
+        "auto_computed": adjust_auto_computed(auto_computed(card, snapshot)),
+        "hints": advice_hints(card, facts, index=index),
+        "fact_groups": group_facts(facts),
         "gaps": [{"name": item["name"],
                   "label": display_label(item["name"], category="fundamental"),
                   "status": item["status"],
@@ -633,7 +862,7 @@ def _attempts_for(card_db: Path | str, row: dict, analysis_id: str | None = None
         items.append({
             "attempt_no": attempt["attempt_no"],
             "analysis_id": attempt["analysis_id"],
-            "created_at": attempt["created_at"],
+            "created_at": display.format_timestamp(attempt["created_at"]),
             "requested_horizon": attempt["requested_horizon"],
             "passed": bool(attempt["passed"]),
             "violations": violations,

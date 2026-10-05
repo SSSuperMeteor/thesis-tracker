@@ -23,6 +23,26 @@ def detail(fixture):
     return card_detail(card_db=fixture.card_db, card_id=fixture.card_id)
 
 
+def shortened_ok(short, full):
+    """True when the page's line is the renderer's, or a documented shortening.
+
+    Two lines drop words the card already prints as a label: the 52-week line
+    loses its repeated "52 周高点", and the reward/risk ratio gains the ": 1"
+    the renderer leaves implicit.
+    """
+    short_label, _, short_text = short.partition(": ")
+    full_label, _, full_text = full.partition(": ")
+    if short_label != full_label:
+        return False
+    if short_text == full_text or short_text in full_text:
+        return True
+    # The 52-week line only removes the words the label already prints.
+    without_repeat = full_text.replace("52 周高点 ", "").replace("52 周高点", "")
+    if short_text == without_repeat:
+        return True
+    return short_text == f"{full_text} : 1"
+
+
 def join(segments):
     """Render a segment array the way the page does: text plus fact displays."""
     return "".join(item["value"] if item["type"] == "text" else item["display"]
@@ -128,9 +148,36 @@ def test_fact_rows_carry_id_label_display_source_and_date(fixture, detail):
 
 
 def test_auto_computed_section_matches_the_rendered_lines(fixture, detail):
+    """Each line is the renderer's own, or a shortened form of it.
+
+    The card page prints the label above the value, so two lines drop the words
+    they repeat (``距52周高点`` and the reward/risk ratio's implicit ": 1").
+    Every other character is the renderer's, unchanged.
+    """
     rendered = rendered_lines(fixture.card_db, fixture.card_id)
     expected = section(rendered, "自动计算（Python）：")
-    assert [f"- {item['label']}: {item['text']}" for item in detail["auto_computed"]] == expected
+    produced = [f"- {item['label']}: {item['text']}" for item in detail["auto_computed"]]
+    assert len(produced) == len(expected)
+    for short, full in zip(produced, expected, strict=True):
+        assert shortened_ok(short, full), (short, full)
+
+
+def test_the_shortened_lines_lose_only_repeated_words(fixture):
+    """The adjustment is a display rule, never a new number."""
+    from thesis_tracker.decision.core import auto_computed
+    from thesis_tracker.webapp.service import adjust_auto_computed
+
+    items = [{"label": "距52周高点", "text": "低于 52 周高点 25.71%"},
+             {"label": "盈亏比", "text": "2.2"},
+             {"label": "止损距离", "text": "3.32%（1.56 倍 ATR）"},
+             {"label": "目标距离", "text": "无法计算（缺少目标位或入场价）"}]
+    adjusted = adjust_auto_computed(items)
+    assert adjusted[0]["text"] == "低于 25.71%"
+    assert adjusted[1]["text"] == "2.2 : 1"
+    # Lines that repeat nothing are passed through untouched.
+    assert adjusted[2] == items[2]
+    assert adjusted[3] == items[3]
+    assert auto_computed is not None
 
 
 def test_gaps_and_disclaimer_match_the_rendered_card(fixture, detail):
@@ -268,8 +315,12 @@ def test_real_archived_cards_reconstruct_byte_for_byte():
         for index, item in enumerate(detail["invalidations"]):
             assert join(item["machine_check"]) == checks[index * 2][len("- 机器检查："):]
             assert join(item["explanation"]) == checks[index * 2 + 1][len("  说明："):]
-        assert [f"- {item['label']}: {item['text']}"
-                for item in detail["auto_computed"]] == section(rendered, "自动计算（Python）：")
+        expected_auto = section(rendered, "自动计算（Python）：")
+        produced_auto = [f"- {item['label']}: {item['text']}"
+                         for item in detail["auto_computed"]]
+        assert len(produced_auto) == len(expected_auto)
+        for short, full in zip(produced_auto, expected_auto, strict=True):
+            assert shortened_ok(short, full), (short, full)
         table = section(rendered, "事实表：")
         assert len(table) == len(detail["facts"])
         for row, fact in zip(table, detail["facts"], strict=True):

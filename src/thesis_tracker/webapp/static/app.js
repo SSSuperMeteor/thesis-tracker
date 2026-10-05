@@ -1,10 +1,9 @@
 /* Thesis Tracker local workbench.
  *
- * Hard rule for this file: the frontend never computes, rounds, rescales or
- * unit-formats a financial number.  Every price, metric, percentage, position
- * and label arrives from the backend as a string and is rendered as text.
- * Allowed number work is limited to non-financial presentation facts such as
- * how many filings a cell holds.
+ * Hard rule for this file: never compute, round, rescale, parse or format a
+ * financial number or a timestamp.  Every price, metric, percentage, position,
+ * date and label arrives ready to render as a string.  The only arithmetic
+ * allowed is counting things like how many filings a cell holds.
  */
 
 const HORIZONS = [
@@ -39,8 +38,8 @@ function clear(node) {
 }
 
 function splitUnit(display) {
-  // The backend already decided the number and the unit text; the page only
-  // gives the unit its smaller, quieter style.
+  // The number and its unit are already decided; this only gives the unit its
+  // smaller, quieter style.
   if (typeof display !== "string") return { number: "—", unit: "" };
   const match = display.match(/^([\d.,\u2212+-]+)\s*(.*)$/);
   if (!match) return { number: display, unit: "" };
@@ -78,7 +77,7 @@ function statusState(status) {
 
 function errorBox(message) {
   return el("div", { class: "error", role: "alert" }, [
-    showState("error", "请求失败"),
+    showState("error", "没能打开这一页"),
     el("p", { text: message }),
   ]);
 }
@@ -151,7 +150,7 @@ function emptyBox(title, hint) {
 function factMarker(segment, onPick) {
   const button = el("button", {
     type: "button", class: "fact-ref", translate: false,
-    title: `事实 ${segment.fact_id}`,
+    title: `来源 ${segment.fact_id}`,
     text: segment.display === null || segment.display === undefined ? segment.fact_id : segment.display,
   });
   button.addEventListener("click", () => onPick(segment.fact_id));
@@ -211,14 +210,21 @@ async function viewOverview(host) {
   const banner = priceBanner(overview);
   if (banner) host.append(banner);
 
-  const staleCount = Object.values(overview.companies)
-    .filter((company) => company.price.stale).length;
+  const companies = Object.values(overview.companies);
+  const summary = overview.price_summary;
+  // The staleness rule lives in the backend constant; the header only repeats it
+  // as a tooltip, so the two can never disagree.
+  const priceText = summary.latest_price_date
+    ? `价格最新至 ${summary.latest_price_date}（落后 ${String(summary.lag_days)} 天）`
+    : "还没有价格数据";
   host.append(pageHead(
     "总览",
-    `数据库里 ${String(Object.keys(overview.companies).length)} 家公司｜`
-    + `数据截至 ${overview.reference_date}｜价格过期阈值 ${String(overview.stale_after_days)} 天`
-    + (staleCount ? `｜${String(staleCount)} 家价格已过期` : ""),
+    `${String(companies.length)} 家公司｜${priceText}`
+    + (summary.missing ? `｜${String(summary.missing)} 家没有价格数据` : ""),
   ));
+  const ruleNote = `价格超过 ${String(summary.stale_after_days)} 个日历日未更新即视为过期。`;
+  const ruleLine = host.querySelector(".page-head .meta");
+  if (ruleLine) ruleLine.title = ruleNote;
 
   const quarters = overview.quarters;
   const years = [];
@@ -275,13 +281,11 @@ async function viewOverview(host) {
 
   host.append(el("section", { class: "section" }, [
     el("div", { class: "toolbar" }, [
-      el("h2", { text: `财报覆盖（${Object.keys(overview.companies).length} 家公司）` }),
+      el("h2", { text: `财报覆盖（${String(companies.length)} 家公司）` }),
       el("span", { class: "spacer" }),
-      el("span", {
-        class: "section-note",
-        text: `按财期截止日所在的日历季度分列；数据截至 ${overview.reference_date}`,
-      }),
+      el("span", { class: "section-note", text: "按财期截止日所在的日历季度分列" }),
     ]),
+    coverageLegend(),
     el("div", { class: "table-scroll" }, [
       el("table", { class: "coverage" }, [
         el("thead", {}, [el("tr", {}, yearCells),
@@ -290,13 +294,27 @@ async function viewOverview(host) {
       ]),
     ]),
   ]));
+  // The newest quarters matter most, so the table opens at that end instead of
+  // at 2014.  The company and summary columns are pinned, so nothing is hidden.
+  const scroller = host.querySelector(".table-scroll");
+  if (scroller) scroller.scrollLeft = scroller.scrollWidth;
   document.title = "总览｜Thesis Tracker";
+}
+
+function coverageLegend() {
+  const item = (glyph, text) => el("span", {}, [glyph, el("span", { text })]);
+  return el("div", { class: "legend" }, [
+    item(el("span", { class: "legend-glyph", text: "K" }), "年报 10-K"),
+    item(el("span", { class: "legend-glyph", text: "Q" }), "季报 10-Q"),
+    item(el("span", { class: "legend-glyph amended", text: "K" }), "修订申报"),
+    item(el("span", { class: "legend-glyph missing", "aria-hidden": "true" }), "没有财报"),
+  ]);
 }
 
 function renderCell(period, className, ticker) {
   if (!period) {
-    return el("td", { class: className, title: "这一季度没有已存档的财报" }, [
-      el("span", { class: "is-missing" }, el("span", { "aria-hidden": "true" })),
+    return el("td", { class: `${className} is-missing`, title: "这一季度没有已存档的财报" }, [
+      el("span", {}, el("span", { "aria-hidden": "true" })),
     ]);
   }
   const entries = period.entries || [];
@@ -313,7 +331,7 @@ function renderCell(period, className, ticker) {
   });
   const summary = entries.map((entry) => entry.form).join(" + ");
   return el("td", {
-    class: className,
+    class: `${className} has-filing`,
     title: `${ticker}\n${summary}\n财期截止 ${period.period_end}\n披露日 ${period.filed_at}\naccession ${period.accession}`,
   }, el("ul", {}, items));
 }
@@ -355,7 +373,7 @@ async function viewCompany(host, ticker) {
       el("td", { class: "num", text: String(filing.fiscal_year) }),
       el("td", { text: filing.fiscal_period }),
     ])),
-  ), "SEC 财期是申报原始字段，仅作对照；页面与接口不按它分列。"));
+  )));
 
   const window = price.windows && price.windows.length ? price.windows[0] : null;
   host.append(panelSection("价格", el("div", { class: "rows" }, [
@@ -379,7 +397,7 @@ async function viewCompany(host, ticker) {
     [{ label: "指标" }, { label: "最新值", numeric: true }, { label: "财期截止", numeric: true },
       { label: "事实编号" }, { label: "状态" }, { label: "算不出的原因" }],
     metricRows,
-  ), `走现有 get_fundamental_metrics 只读路径；数据截至 ${metrics.data_end_date || "—"}。`));
+  ), `最新财期披露日 ${metrics.data_end_date || "—"}。`));
 
   const cards = page.cards;
   host.append(panelSection("建议卡", cards.length
@@ -396,6 +414,28 @@ async function viewCompany(host, ticker) {
     ])))
     : emptyBox("还没有这家公司的建议卡。", "选择周期后点击生成建议卡。")));
   document.title = `${page.ticker}｜Thesis Tracker`;
+}
+
+/* 一个短编号加一个复制按钮：完整编号只在按钮里出现，行里不重复。 */
+function copyRow(label, short, full) {
+  const status = el("span", { class: "meta", text: "" });
+  const button = el("button", { type: "button", class: "small", text: "复制完整编号" });
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(full);
+      status.textContent = "已复制。";
+    } catch {
+      status.textContent = `无法自动复制，完整编号：${full}`;
+    }
+  });
+  return el("div", { class: "row" }, [
+    el("span", { class: "label", text: label }),
+    el("span", { class: "value" }, [
+      el("span", { class: "mono", translate: false, text: short }),
+      button,
+      status,
+    ]),
+  ]);
 }
 
 function row(label, value, numeric) {
@@ -490,16 +530,26 @@ async function viewCards(host, query) {
   host.append(cards.length
     ? table([{ label: "公司" }, { label: "周期" }, { label: "动作" }, { label: "倾向" },
       { label: "创建时价格", numeric: true }, { label: "创建时间" },
-      { label: "校验器" }, { label: "提示词版本" }, { label: "" }],
+      { label: "规则版本" }, { label: "" }],
     cards.map((card) => el("tr", {}, [
       el("td", {}, el("a", { href: `#/company/${card.ticker}`, translate: false, text: card.ticker })),
       el("td", { text: card.horizon }),
-      el("td", { text: card.action }),
-      el("td", { text: card.bias }),
+      el("td", { class: "plain", text: card.action }),
+      el("td", { class: "plain", text: card.bias }),
       el("td", { class: "num" }, quantity(card.creation_price)),
-      el("td", { text: card.created_at }),
-      el("td", { class: "mono", text: card.validator_version }),
-      el("td", { class: "mono", text: card.prompt_version }),
+      el("td", { class: "plain", text: card.created_at }),
+      el("td", { class: "plain" }, [
+        el("span", { text: card.version_mark }),
+        card.rules_label
+          ? el("span", {
+            class: "tag",
+            title: "这张卡由更早的校验器或提示词生成，详情页底部有完整版本。",
+          }, [
+            el("span", { class: "shape shape-open", "aria-hidden": "true" }),
+            el("span", { text: card.rules_label }),
+          ])
+          : null,
+      ]),
       el("td", {}, el("a", { href: `#/cards/${card.card_id}`, text: "查看" })),
     ])))
     : emptyBox("还没有符合条件的建议卡。", "在公司页选择周期后点击生成建议卡。"));
@@ -516,6 +566,8 @@ async function viewCard(host, cardId) {
     const row = evidenceRows.get(factId);
     if (!row) return;
     row.scrollIntoView({ block: "center", behavior: "smooth" });
+    // Focus as well, so a keyboard user lands on the same row a click targets.
+    row.focus({ preventScroll: true });
     row.classList.remove("flash");
     void row.offsetWidth;
     row.classList.add("flash");
@@ -524,10 +576,9 @@ async function viewCard(host, cardId) {
   const reading = el("div", { class: "reading" }, [
     el("div", { class: "judgment" }, [
       el("p", { class: "bias", text: `${card.bias}｜${card.action}` }),
-      el("p", {}, [
-        el("span", { class: "chip", text: `置信度 ${card.confidence}（${card.confidence_calibration}）` }),
-        el("span", { class: "chip", text: card.horizon }),
-      ]),
+      // Quiet inline facts, not bordered boxes: these are not buttons.
+      el("p", { class: "qualifiers", text:
+        `置信度 ${card.confidence}（${card.confidence_calibration}）｜周期 ${card.horizon}` }),
       card.price_data_end
         ? el("p", { class: "meta", text: `价格数据截至 ${card.price_data_end}` })
         : null,
@@ -546,11 +597,16 @@ async function viewCard(host, cardId) {
       el("p", { class: "machine" }, segments(item.machine_check, pick)),
       el("p", { class: "explain" }, segments(item.explanation, pick)),
     ]))),
-    block("自动计算（Python）", table([{ label: "项目" }, { label: "结果" }],
-      card.auto_computed.map((item) => el("tr", {}, [
-        el("th", { scope: "row", text: item.label }),
-        el("td", { class: "num", text: item.text }),
-      ]))), "只做显示，不参与校验。"),
+    block("自动计算", [
+      table([{ label: "项目" }, { label: "结果" }],
+        card.auto_computed.map((item) => el("tr", {}, [
+          el("th", { scope: "row", text: item.label }),
+          el("td", { class: "num", text: item.text }),
+        ]))),
+      card.hints.length
+        ? el("div", { class: "hints" }, card.hints.map((hint) => el("p", { text: hint })))
+        : null,
+    ], autoComputedNote(card)),
     block("数据缺口", card.gaps.length
       ? table([{ label: "项目" }, { label: "状态" }, { label: "原因" }],
         card.gaps.map((gap) => el("tr", {}, [
@@ -575,35 +631,29 @@ async function viewCard(host, cardId) {
       + `｜请求模型 ${card.versions.requested_model || "—"}｜返回模型 ${card.versions.returned_model || "—"}` }),
   ]);
 
-  const factsTable = el("table", { class: "evidence-table" }, [
-    el("colgroup", {}, [
-      el("col", { class: "c-fact" }), el("col", { class: "c-value" }),
-      el("col", { class: "c-date" }), el("col", { class: "c-src" }),
-    ]),
-    el("thead", {}, el("tr", {}, [
-      el("th", { scope: "col", text: "事实" }),
-      el("th", { scope: "col", text: "值" }),
-      el("th", { scope: "col", text: "日期或财期" }),
-      el("th", { scope: "col", text: "来源" }),
-    ])),
-    el("tbody", {}, card.facts.map((fact) => {
-      const tr = el("tr", { id: `fact-${fact.fact_id}` }, [
-        el("th", { scope: "row" }, [
-          el("span", { text: fact.label }),
-          el("br"),
-          // The full identifier is long; the row keeps a short form and the
-          // complete id stays available in the title and in the highlight key.
-          el("span", { class: "fact-id src", translate: false, title: fact.fact_id,
-            text: `${fact.fact_id.slice(0, 12)}…${fact.fact_id.slice(-6)}` }),
-        ]),
-        el("td", { class: "num", text: fact.display }),
-        el("td", { text: fact.date_or_period || "—" }),
-        el("td", { class: "src", text: fact.provider || fact.formula || "—" }),
-      ]);
-      evidenceRows.set(fact.fact_id, tr);
-      return tr;
-    })),
-  ]);
+  const evidenceBody = el("div", { class: "evidence-scroll" },
+    card.fact_groups.map((group) => el("section", { class: "fact-group" }, [
+      el("h3", { text: group.label }),
+      ...group.facts.map((fact) => {
+        const row = el("div", {
+          class: "fact-row",
+          tabindex: "-1",
+          "data-fact-id": fact.fact_id,
+          title: `来源 ${fact.fact_id}`,
+        }, [
+          el("div", { class: "fact-head" }, [
+            el("span", { class: "fact-name", text: fact.label }),
+            el("span", { class: "fact-value", text: fact.display }),
+          ]),
+          el("div", { class: "fact-meta" }, [
+            el("span", { text: fact.source_label }),
+            el("span", { class: "fact-date", text: fact.date_or_period || "—" }),
+          ]),
+        ]);
+        evidenceRows.set(fact.fact_id, row);
+        return row;
+      }),
+    ])));
 
   host.append(
     pageHead(`${card.ticker} 建议卡`, `${card.as_of}｜创建于 ${card.created_at}`),
@@ -611,7 +661,7 @@ async function viewCard(host, cardId) {
       reading,
       el("aside", { class: "evidence", "aria-label": "事实证据" }, [
         el("h2", { text: `事实（${String(card.facts.length)} 条）` }),
-        el("div", { class: "table-scroll" }, factsTable),
+        evidenceBody,
       ]),
     ]),
   );
@@ -634,6 +684,12 @@ function priceLine(card) {
   return el("p", { class: "prices" }, parts);
 }
 
+function autoComputedNote(card) {
+  const parts = ["这几项由卡里的价位算出，不参与校验。"];
+  if (card.hints.length) parts.push("提示按经验阈值给出，还没有用到期结果检验过。");
+  return parts.join("");
+}
+
 function block(title, children, note) {
   return el("section", { class: "block" }, [
     el("h2", { text: title }),
@@ -642,45 +698,44 @@ function block(title, children, note) {
   ]);
 }
 
-/* The axis is inset by 4.5em on each side (see --band-inset), so a marker at
- * 0% or 100% still has room for its label inside the column.  Both the
- * percentage and the 0-1 fraction are computed by the backend; this only turns
- * the fraction into a CSS length. */
-function markerOffset(fraction) {
-  return `left:calc(4.5em + (100% - 9em) * ${fraction})`;
+function bandShape(shape) {
+  return el("span", { class: `band-shape shape-${shape}`, "aria-hidden": "true" });
 }
 
 function priceBand(band) {
   const marks = band.markers;
   const entry = marks.filter((mark) => mark.key.startsWith("entry_"));
-  // The plot's height and the stacked label rows are the backend's geometry, in
-  // pixels; the label line box is fixed in CSS so the two agree exactly.
+  // The plot's height is the backend's label geometry: labels sit above and
+  // below the axis, each side deep enough for its deepest row.
   const plot = el("div", { class: "band-plot",
     style: `height:${band.plot_height_px}px` }, [
     el("div", { class: "band-axis" }, [
-      entry.length === 2
+      entry.length === 2 && band.range_width_percent !== null
         ? el("span", {
           class: "band-range",
-          style: `${markerOffset(entry[0].fraction)};right:calc(4.5em + (100% - 9em) * ${1 - entry[1].fraction})`,
+          style: `left:${band.range_left_percent}%;width:${band.range_width_percent}%`,
         })
         : null,
     ]),
     ...marks.map((mark) => el("span", {
-      class: `band-mark${mark.key.startsWith("entry_") ? " is-entry" : ""}`,
-      style: `${markerOffset(mark.fraction)};--label-offset:${mark.label_offset_px || 0}px`,
+      class: `band-mark side-${mark.label_side} shape-${mark.shape}`,
+      style: `left:${mark.percent}%;--label-offset:${mark.label_offset_px || 0}px`,
     }, [
-      // Two block lines, no <br>: the stack's height must be exactly the two
-      // 16px line boxes the backend reserved for it.
+      bandShape(mark.shape),
       el("span", { class: "stack" }, [
         el("span", { class: "name", text: mark.label }),
         el("span", { class: "price", text: mark.value }),
       ]),
-      el("span", { class: "tick" }),
     ])),
   ]);
   return el("div", { class: "band" }, [
-    el("p", { class: "section-note", text: "价位带（位置由后端按价格算出）" }),
+    el("p", { class: "section-note", text: "价位带" }),
     plot,
+    el("div", { class: "band-legend" },
+      band.legend.map((item) => el("span", {}, [
+        bandShape(item.shape),
+        el("span", { text: item.label }),
+      ]))),
   ]);
 }
 
@@ -693,7 +748,7 @@ async function viewJobs(host) {
   runningJobs = jobs.filter((job) => job.status === "running").length;
   renderNav();
   clear(host);
-  host.append(pageHead("任务", `共 ${String(jobs.length)} 个任务；同一时间只运行一个分析。`));
+  host.append(pageHead("任务", `共 ${String(jobs.length)} 个任务。同一时间只运行一个分析。`));
   if (!jobs.length) {
     host.append(emptyBox("还没有任务。", "在公司页点击生成建议卡，确认后会在这里排队。"));
     return;
@@ -704,7 +759,7 @@ async function viewJobs(host) {
     jobs.map((job) => el("tr", {}, [
       el("td", { text: job.kind_label }),
       el("td", {}, jobState(job)),
-      el("td", { class: "mono", translate: false, text: parameterText(job.parameters) }),
+      el("td", { text: job.parameter_summary }),
       el("td", { text: job.created_at }),
       el("td", { text: job.started_at || "—" }),
       el("td", { text: job.finished_at || "—" }),
@@ -713,10 +768,6 @@ async function viewJobs(host) {
     ])),
   ));
   document.title = "任务｜Thesis Tracker";
-}
-
-function parameterText(parameters) {
-  return Object.entries(parameters).map(([key, value]) => `${key}=${String(value)}`).join(" ");
 }
 
 function jobState(job) {
@@ -728,14 +779,21 @@ function jobState(job) {
 }
 
 function stepLine(event) {
+  const when = event.at_display ? `${event.at_display}　` : "";
   if (event.event === "prefetch") {
-    return ["准备", `预取 ${String(event.tool_calls)} 次本地工具，基础包 ${String(event.base_pack_bytes)} 字节`];
+    return ["准备", `${when}读取本地数据 ${String(event.tool_calls)} 次`];
   }
-  if (event.event === "round_start") {
-    return ["请求", `第 ${String(event.round)} 轮｜累计输入 ${String(event.input_tokens)}｜输出 ${String(event.output_tokens)}`];
+  if (event.event === "round") {
+    // The usage on this event is what the round actually spent, plus the
+    // running total, so the list never shows a placeholder zero.
+    return ["模型", `${when}第 ${String(event.round)} 轮`
+      + `｜本轮输入 ${String(event.round_input_tokens)}｜输出 ${String(event.round_output_tokens)}`
+      + `｜累计输入 ${String(event.input_tokens)}｜输出 ${String(event.output_tokens)}`];
   }
   if (event.event === "tool_call") {
-    return ["工具", `${event.tool} ${event.args ? parameterText(event.args) : ""}｜${String(event.bytes)} 字节｜${event.status}`];
+    const args = event.args ? Object.entries(event.args)
+      .map(([key, value]) => `${key} ${String(value)}`).join("，") : "";
+    return ["工具", `${event.tool} ${args}｜${String(event.bytes)} 字节｜${event.status}`];
   }
   if (event.event === "draft_rejected") {
     return ["校验", `第 ${String(event.attempt)} 稿被拒：${(event.rules || []).join("、")}`];
@@ -755,9 +813,9 @@ async function viewJob(host, jobId) {
   host.append(pageHead(job.kind_label, `任务 ${job.job_id}`));
   host.append(el("div", { class: "toolbar" }, [
     jobState(job),
-    el("span", { class: "mono", translate: false, text: parameterText(job.parameters) }),
+    el("span", { class: "meta", text: job.parameter_summary }),
   ]));
-  host.append(panelSection("逐步进度", el("div", { class: "panel" }, [
+  host.append(panelSection("进度", el("div", { class: "panel" }, [
     el("ol", { class: "steps", "aria-live": "polite" }, job.progress.map((event) => {
       const [kind, detail] = stepLine(event);
       return el("li", {}, [
@@ -766,7 +824,7 @@ async function viewJob(host, jobId) {
       ]);
     })),
     job.progress.length ? null : el("p", { class: "reason", text: "还没有进度事件。" }),
-  ]), "不做假进度条：不知道总量时只显示已完成的步骤。"));
+  ])));
   if (job.error) {
     host.append(panelSection("错误", el("div", { class: "error" }, [
       showState("error", "任务失败"), el("p", { text: job.error }),
@@ -774,7 +832,7 @@ async function viewJob(host, jobId) {
   }
   if (job.result && job.result.card_id) {
     host.append(panelSection("结果", el("div", { class: "rows" }, [
-      row("存档编号", job.result.card_id),
+      copyRow("存档编号", job.result.card_id_short, job.result.card_id),
       row("公司", job.result.ticker),
       row("分析截至日", job.result.as_of),
       row("周期", job.result.horizon),
@@ -783,7 +841,8 @@ async function viewJob(host, jobId) {
         : null,
       el("div", { class: "row" }, [
         el("span", { class: "label", text: "建议卡" }),
-        el("span", { class: "value" }, el("a", { href: `#/cards/${job.result.card_id}`, text: "打开" })),
+        el("span", { class: "value" }, el("a", {
+          href: `#/cards/${job.result.card_id}`, text: "打开建议卡" })),
       ]),
     ].filter(Boolean))));
   }

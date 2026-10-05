@@ -460,10 +460,6 @@ def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
             stats["gate_reason"] = "estimated_total_over_1_5m"
             return reject("token_limit", [_error("L03", "messages", "本轮预估输入超过累计硬上限；未发送请求。")])
         stats["rounds"] += 1
-        emit({"event": "round_start", "round": stats["rounds"],
-              "index": stats["rounds"], "input_tokens": stats["input_tokens"],
-              "output_tokens": stats["output_tokens"],
-              "cache_hit_tokens": stats["cache_hit_tokens"]})
         try:
             response = client.complete(messages=messages,
                                        tools=TOOL_SCHEMAS if stats["input_tokens"] + stats["output_tokens"] <= SOFT_TOTAL_TOKENS else [],
@@ -486,6 +482,16 @@ def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
                                      "cache_hit_tokens": cached})
         if stats["input_tokens"] + stats["output_tokens"] > MAX_TOTAL_TOKENS:
             return reject("token_limit", [_error("L03", "tokens", "累计 token 超过硬上限。")])
+        # Reported only after the response, so the numbers are the ones the
+        # provider actually billed for this round plus the running total; a
+        # progress list that shows usage must never show a placeholder zero.
+        emit({"event": "round", "round": stats["rounds"], "index": stats["rounds"],
+              "model": response.get("model"),
+              "round_input_tokens": incoming, "round_output_tokens": outgoing,
+              "round_cache_hit_tokens": cached,
+              "input_tokens": stats["input_tokens"],
+              "output_tokens": stats["output_tokens"],
+              "cache_hit_tokens": stats["cache_hit_tokens"]})
         message = response.get("message") or {}
         assistant = {"role": "assistant", "content": message.get("content"),
                      "reasoning_content": message.get("reasoning_content"),

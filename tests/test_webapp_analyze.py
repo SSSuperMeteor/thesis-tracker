@@ -165,7 +165,7 @@ def test_a_queued_job_runs_through_the_worker_and_archives_a_card(app, fixture):
     assert job["error"] is None
     events = [item["event"] for item in job["progress"]]
     assert events[0] == "prefetch" and events[-1] == "passed"
-    assert "round_start" in events
+    assert "round" in events
 
 
 def test_a_failing_analysis_is_recorded_as_failed_not_retried(app, fixture, monkeypatch):

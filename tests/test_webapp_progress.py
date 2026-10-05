@@ -117,12 +117,12 @@ def test_events_arrive_in_run_order_when_a_callback_is_given(legal_draft, tmp_pa
     names = [event["event"] for event in events]
     assert names[0] == "prefetch"
     assert names[-1] == "passed"
-    assert "round_start" in names and "tool_call" in names
+    assert "round" in names and "tool_call" in names
     assert "draft_rejected" not in names
 
     prefetch = events[0]
     assert prefetch["tool_calls"] == result["stats"]["prefetch_calls"]
-    rounds = [event["round"] for event in events if event["event"] == "round_start"]
+    rounds = [event["round"] for event in events if event["event"] == "round"]
     assert rounds == [1, 2]
     tools = [event for event in events if event["event"] == "tool_call"]
     assert [event["tool"] for event in tools] == ["get_price_history", "get_indicators"]
@@ -137,21 +137,72 @@ def test_events_arrive_in_run_order_when_a_callback_is_given(legal_draft, tmp_pa
     assert "card" not in passed and "rendered" not in passed
 
 
-def test_per_round_usage_is_reported_for_the_progress_list(legal_draft, tmp_path):
+def test_every_model_response_reports_its_real_usage(legal_draft, tmp_path):
+    """The progress list must show the tokens a round actually spent.
+
+    The reported bug: the only usage-bearing event was emitted before the
+    request, so it always read "累计输入 0｜输出 0" while the result section
+    showed the true totals.
+    """
     events = []
-    run_analysis(TICKER, AS_OF, client=passing_script(legal_draft),
-                 archive_path=tmp_path / "cards.db", progress=events.append)
-    rounds = [event for event in events if event["event"] == "round_start"]
+    result = run_analysis(TICKER, AS_OF, client=passing_script(legal_draft),
+                          archive_path=tmp_path / "cards.db", progress=events.append)
+    rounds = [event for event in events if event["event"] == "round"]
     assert [event["index"] for event in rounds] == [1, 2]
-    # The usage on a round-start event is the running total before that request,
-    # so the second round shows what the first one cost.
-    assert [event["input_tokens"] for event in rounds] == [0, 100]
-    assert [event["output_tokens"] for event in rounds] == [0, 50]
-    assert [event["cache_hit_tokens"] for event in rounds] == [0, 20]
-    assert events[-1]["event"] == "passed"
-    assert events[-1]["input_tokens"] == 200
-    assert events[-1]["output_tokens"] == 100
-    assert events[-1]["cache_hit_tokens"] == 40
+    # Each event carries the usage of its own round...
+    for event in rounds:
+        assert event["round_input_tokens"] == 100
+        assert event["round_output_tokens"] == 50
+        assert event["round_cache_hit_tokens"] == 20
+    # ... and the running total after it, which is what the page displays.
+    assert [event["input_tokens"] for event in rounds] == [100, 200]
+    assert [event["output_tokens"] for event in rounds] == [50, 100]
+    assert [event["cache_hit_tokens"] for event in rounds] == [20, 40]
+    # The final event agrees with the run's own statistics.
+    assert rounds[-1]["input_tokens"] == result["stats"]["input_tokens"] == 200
+    assert rounds[-1]["output_tokens"] == result["stats"]["output_tokens"] == 100
+    assert rounds[-1]["cache_hit_tokens"] == result["stats"]["cache_hit_tokens"] == 40
+    assert rounds[-1]["round"] == result["stats"]["rounds"] == 2
+
+
+def test_usage_events_follow_varying_per_round_usage(legal_draft, tmp_path):
+    """Numbers come from the response, not from a running assumption."""
+    replies = [
+        tool_reply(call(), call("get_indicators", call_id="call_2")),
+        final_reply(legal_draft),
+    ]
+    usages = [{"prompt_tokens": 700, "completion_tokens": 30,
+               "prompt_cache_hit_tokens": 500},
+              {"prompt_tokens": 900, "completion_tokens": 70,
+               "prompt_cache_hit_tokens": 100}]
+    events = []
+
+    class Varying(ScriptedClient):
+        def complete(self, *, messages, tools, max_tokens):
+            reply = super().complete(messages=messages, tools=tools,
+                                     max_tokens=max_tokens)
+            reply["usage"] = usages[len(self.requests) - 1]
+            return reply
+
+    result = run_analysis(TICKER, AS_OF, client=Varying(replies),
+                          archive_path=tmp_path / "cards.db", progress=events.append)
+    rounds = [event for event in events if event["event"] == "round"]
+    assert [(event["round_input_tokens"], event["round_output_tokens"])
+            for event in rounds] == [(700, 30), (900, 70)]
+    assert [event["input_tokens"] for event in rounds] == [700, 1600]
+    assert [event["output_tokens"] for event in rounds] == [30, 100]
+    assert result["stats"]["input_tokens"] == 1600
+
+
+def test_a_usage_gate_still_rejects_before_reporting_usage(legal_draft, tmp_path):
+    """A response with unusable usage never produces a usage event."""
+    script = ScriptedClient([{"usage": {"prompt_tokens": 1, "completion_tokens": 1,
+                                        "prompt_cache_hit_tokens": 99}}])
+    events = []
+    result = run_analysis(TICKER, AS_OF, client=script,
+                          archive_path=tmp_path / "cards.db", progress=events.append)
+    assert result["status"] == "rejected" and result["reason"] == "usage_unavailable"
+    assert not [event for event in events if event["event"] == "round"]
 
 
 def test_a_rejected_draft_reports_its_rules(legal_draft, tmp_path):
@@ -191,6 +242,8 @@ def test_progress_events_carry_no_secret_or_raw_model_text(legal_draft, tmp_path
     allowed = {"event", "round", "index", "tool", "args", "bytes", "status",
                "tool_calls", "input_tokens", "output_tokens", "cache_hit_tokens",
                "attempt", "rules", "violations", "reason", "card_id", "rounds",
-               "revisions", "base_pack_bytes", "catalog_bytes"}
+               "revisions", "base_pack_bytes", "catalog_bytes",
+               "round_input_tokens", "round_output_tokens",
+               "round_cache_hit_tokens", "model"}
     for event in events:
         assert set(event) <= allowed, set(event) - allowed

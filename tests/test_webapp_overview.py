@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 from webapp_fixtures import (
     AMENDMENT,
@@ -138,3 +140,81 @@ def test_card_counts_come_from_the_archive(fixture, overview):
     assert overview["companies"]["AAPL"]["card_count"] == 1
     assert overview["companies"]["NVDA"]["card_count"] == 0
     assert overview["companies"]["MSFT"]["card_count"] == 0
+
+
+def test_the_timeline_drops_quarters_no_company_reports_in(fixture):
+    """A leading column nobody fills is noise; the table starts at real data."""
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    # The fixture's earliest filing is 2024-12-28, so 2024Q4 is the first column
+    # that can carry anything, even though the price series starts in 2024.
+    built = build_overview(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                           card_db=fixture.card_db,
+                           reference_date=fixture.reference_date)
+    assert built["quarters"][0] == "2024Q4"
+    assert built["quarters"] == sorted(built["quarters"])
+
+
+def test_the_timeline_keeps_a_gap_between_two_reported_quarters(fixture):
+    """Only empty *leading* columns are dropped; a real gap stays visible."""
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    built = build_overview(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                           card_db=fixture.card_db,
+                           reference_date=fixture.reference_date)
+    # 2025Q3 holds AAPL/MSFT/... filings and 2025Q4 does too, so a company with
+    # nothing in between must still show the gap rather than a shrunken axis.
+    filled = [key for key in built["quarters"]
+              if any(key in company["periods"] for company in built["companies"].values())]
+    assert filled == built["quarters"]
+
+
+def test_every_timeline_column_has_at_least_one_filing(fixture):
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    built = build_overview(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                           card_db=fixture.card_db,
+                           reference_date=fixture.reference_date)
+    for key in built["quarters"]:
+        carriers = [ticker for ticker, company in built["companies"].items()
+                    if key in company["periods"]]
+        assert carriers, key
+
+
+def test_the_summary_reports_the_oldest_latest_price_date(fixture):
+    """The header date is the least fresh company, so it never overstates."""
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    built = build_overview(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                           card_db=fixture.card_db,
+                           reference_date=fixture.reference_date)
+    dated = [company["price"]["end_date"] for company in built["companies"].values()
+             if company["price"]["end_date"]]
+    assert built["price_summary"]["latest_price_date"] == min(dated)
+    expected = (date.fromisoformat(built["reference_date"])
+                - date.fromisoformat(min(dated))).days
+    assert built["price_summary"]["lag_days"] == expected
+    assert built["price_summary"]["stale_after_days"] == 5
+
+
+def test_the_summary_counts_companies_without_any_price(fixture):
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    built = build_overview(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                           card_db=fixture.card_db,
+                           reference_date=fixture.reference_date)
+    missing = sum(1 for company in built["companies"].values()
+                  if not company["price"]["end_date"])
+    assert built["price_summary"]["missing"] == missing == 1
+    assert built["price_summary"]["latest_price_date"] is not None
+
+
+def test_the_summary_survives_a_database_with_no_prices(tmp_path, fixture):
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    built = build_overview(fact_db=fixture.fact_db, price_db=tmp_path / "absent.db",
+                           card_db=fixture.card_db,
+                           reference_date=fixture.reference_date)
+    assert built["price_summary"]["latest_price_date"] is None
+    assert built["price_summary"]["lag_days"] is None
+    assert built["price_summary"]["missing"] == len(built["companies"])
