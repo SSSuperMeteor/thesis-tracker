@@ -79,6 +79,17 @@ CREATE TABLE IF NOT EXISTS chat_model_calls (
     UNIQUE (message_id, round_no)
 );
 
+-- Facts this conversation has already seen: everything a tool returned in any
+-- of its turns, plus the price fields of every card it has read.  C03 resolves
+-- placeholders against this, so it is per conversation and never global.
+CREATE TABLE IF NOT EXISTS conversation_facts (
+    conversation_id TEXT NOT NULL,
+    fact_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    PRIMARY KEY (conversation_id, fact_id)
+);
+
 CREATE TABLE IF NOT EXISTS proposals (
     proposal_id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL,
@@ -237,6 +248,41 @@ class ChatStore:
                 "ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 (conversation_id, limit)).fetchall()
         return [_message(row) for row in reversed(rows)]
+
+    # -- evidence set --------------------------------------------------------
+
+    def add_facts(self, conversation_id: str, facts: list[dict]) -> list[str]:
+        """Record facts for this conversation; return any id with a conflict.
+
+        The same fact id must always describe the same value, so a second
+        different value for one id is reported rather than silently replacing
+        what an earlier answer already relied on.
+        """
+        conflicts: list[str] = []
+        with self._connect() as connection:
+            for fact in facts:
+                payload = json.dumps(fact, ensure_ascii=False, sort_keys=True)
+                existing = connection.execute(
+                    "SELECT payload_json FROM conversation_facts WHERE "
+                    "conversation_id=? AND fact_id=?",
+                    (conversation_id, fact["fact_id"])).fetchone()
+                if existing is None:
+                    connection.execute(
+                        "INSERT INTO conversation_facts (conversation_id, fact_id, "
+                        "payload_json, first_seen_at) VALUES (?,?,?,?)",
+                        (conversation_id, fact["fact_id"], payload, _now()))
+                elif existing["payload_json"] != payload:
+                    conflicts.append(fact["fact_id"])
+        return conflicts
+
+    def facts(self, conversation_id: str) -> dict[str, dict]:
+        """This conversation's evidence set, keyed by fact id."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT fact_id, payload_json FROM conversation_facts "
+                "WHERE conversation_id=? ORDER BY first_seen_at, fact_id",
+                (conversation_id,)).fetchall()
+        return {row["fact_id"]: json.loads(row["payload_json"]) for row in rows}
 
     # -- audit rows ----------------------------------------------------------
 

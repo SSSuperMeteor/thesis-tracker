@@ -260,3 +260,29 @@ def test_the_schema_is_created_on_first_use(tmp_path):
             "SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"conversations", "messages", "chat_tool_calls", "chat_model_calls",
             "proposals"} <= tables
+
+
+def test_the_evidence_set_is_per_conversation(store):
+    """A fact seen in one conversation is invisible to another."""
+    first = store.create_conversation("NVDA")
+    second = store.create_conversation("NVDA")
+    fact = {"fact_id": "tiingo|NVDA|2026-10-02|daily", "name": "close", "value": "233.95",
+            "unit": "USD/share", "date_or_period": "2026-10-02", "ticker": "NVDA",
+            "source": {"provider": "tiingo"}}
+    assert store.add_facts(first["conversation_id"], [fact]) == []
+    assert list(store.facts(first["conversation_id"])) == [fact["fact_id"]]
+    assert store.facts(second["conversation_id"]) == {}
+
+
+def test_a_fact_id_may_not_change_its_value_within_a_conversation(store):
+    conversation = store.create_conversation("NVDA")
+    fact = {"fact_id": "tiingo|NVDA|2026-10-02|daily", "name": "close", "value": "233.95",
+            "unit": "USD/share", "date_or_period": "2026-10-02", "ticker": "NVDA",
+            "source": {"provider": "tiingo"}}
+    assert store.add_facts(conversation["conversation_id"], [fact]) == []
+    # Adding it twice unchanged is fine (a repeated tool call).
+    assert store.add_facts(conversation["conversation_id"], [fact]) == []
+    changed = dict(fact, value="999.99")
+    assert store.add_facts(conversation["conversation_id"], [changed]) == [fact["fact_id"]]
+    # The original value survives; the archive is not silently rewritten.
+    assert store.facts(conversation["conversation_id"])[fact["fact_id"]]["value"] == "233.95"
