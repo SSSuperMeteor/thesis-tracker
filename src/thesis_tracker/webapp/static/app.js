@@ -731,8 +731,9 @@ function priceBand(band) {
       ]),
     ])),
   ]);
+  // No heading: the axis and its legend already say what this is, and a label
+  // repeating them would be decoration.
   return el("div", { class: "band" }, [
-    el("p", { class: "section-note", text: "价位带" }),
     el("div", { class: "band-scroll" }, plot),
     el("div", { class: "band-legend" },
       band.legend.map((item) => el("span", {}, [

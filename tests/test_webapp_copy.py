@@ -151,3 +151,11 @@ def test_every_progress_event_kind_has_its_own_wording():
     for kind in ("prefetch", "round_start", "round", "tool_call", "draft_rejected",
                  "passed", "rejected"):
         assert f'"{kind}"' in step, kind
+
+
+def test_the_band_carries_no_heading_of_its_own():
+    """The axis plus its legend are self-explanatory; a label would repeat them."""
+    script = read(STATIC / "app.js")
+    band = script.split("function priceBand")[1].split("/* ------")[0]
+    assert '"价位带"' not in band
+    assert "band-legend" in band
