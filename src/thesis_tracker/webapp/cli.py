@@ -9,6 +9,8 @@ from pathlib import Path
 from thesis_tracker.decision.core import DEFAULT_ARCHIVE
 from thesis_tracker.financial.pit_store import DEFAULT_FACT_DB
 from thesis_tracker.prices import DEFAULT_DB as DEFAULT_PRICE_DB
+from thesis_tracker.webapp.chat.pricing import DEFAULT_PRICING_PATH
+from thesis_tracker.webapp.chat.store import DEFAULT_CHAT_DB
 from thesis_tracker.webapp.jobs import DEFAULT_JOB_DB
 
 DEFAULT_PORT = 8765
@@ -28,6 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--price-db", default=str(DEFAULT_PRICE_DB))
     parser.add_argument("--card-db", default=str(DEFAULT_ARCHIVE))
     parser.add_argument("--job-db", default=str(DEFAULT_JOB_DB))
+    parser.add_argument("--chat-db", default=str(DEFAULT_CHAT_DB))
+    parser.add_argument("--pricing", default=str(DEFAULT_PRICING_PATH),
+                        help="per-million-token prices used for the cost estimates")
     parser.add_argument("--no-worker", action="store_true",
                         help="start the web server without the analysis worker")
     return parser
@@ -44,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         app = WebApp(fact_db=Path(args.fact_db), price_db=Path(args.price_db),
                      card_db=Path(args.card_db), job_db=Path(args.job_db),
+                     chat_db=Path(args.chat_db), pricing_path=Path(args.pricing),
                      host=args.host, port=args.port, token=args.token,
                      start_worker=not args.no_worker)
     except OSError as exc:

@@ -189,7 +189,8 @@ class ChatRound:
                 recorded = self.store.append_message(
                     self.conversation["conversation_id"], role="assistant", text=text,
                     template_text=body, segments=segments,
-                    attempts=self.stats["attempts"], prompt_version=PROMPT_VERSION)
+                    attempts=self.stats["attempts"], prompt_version=PROMPT_VERSION,
+                    reply_to=self.message["message_id"])
                 self.emit({"event": "passed", "rounds": self.stats["rounds"],
                            "tool_calls": self.stats["tool_calls"],
                            "input_tokens": self.stats["input_tokens"],
@@ -298,7 +299,8 @@ class ChatRound:
             rejected={"reason": reason, "violations": violations,
                       "draft": attempts[-1]["draft"] if attempts else None,
                       "attempts": attempts},
-            attempts=max(self.stats["attempts"], 1), prompt_version=PROMPT_VERSION)
+            attempts=max(self.stats["attempts"], 1), prompt_version=PROMPT_VERSION,
+            reply_to=self.message["message_id"])
 
 
 def _error(rule: str, location: str, message: str) -> dict:

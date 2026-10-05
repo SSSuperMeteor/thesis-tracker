@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS messages (
     attempts INTEGER NOT NULL DEFAULT 0,
     prompt_version TEXT,
     proposal_id TEXT,
+    reply_to TEXT,
     created_at TEXT NOT NULL,
     FOREIGN KEY (conversation_id) REFERENCES conversations (conversation_id)
 );
@@ -161,6 +162,13 @@ class ChatStore:
             raise KeyError(conversation_id)
         return _conversation(row)
 
+    def conversations_for_all(self) -> list[dict]:
+        """Every conversation, archived included: the announce pass walks them."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM conversations ORDER BY last_activity_at, rowid").fetchall()
+        return [_conversation(row) for row in rows]
+
     def conversations_for(self, ticker: str, *, include_archived: bool = False) -> list[dict]:
         query = ("SELECT * FROM conversations WHERE upper(ticker)=upper(?)")
         if not include_archived:
@@ -200,7 +208,8 @@ class ChatStore:
                        template_text: str | None = None, segments: list | None = None,
                        rejected: dict | None = None, attempts: int = 0,
                        prompt_version: str | None = None,
-                       proposal_id: str | None = None) -> dict:
+                       proposal_id: str | None = None,
+                       reply_to: str | None = None) -> dict:
         if role not in ROLES:
             raise ValueError(f"unknown role: {role}")
         message_id = str(uuid.uuid4())
@@ -214,11 +223,11 @@ class ChatStore:
             connection.execute(
                 "INSERT INTO messages (message_id, conversation_id, role, text, "
                 "template_text, segments_json, rejected_json, attempts, prompt_version, "
-                "proposal_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "proposal_id, reply_to, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (message_id, conversation_id, role, text, template_text,
                  None if segments is None else json.dumps(segments, ensure_ascii=False),
                  None if rejected is None else json.dumps(rejected, ensure_ascii=False),
-                 attempts, prompt_version, proposal_id, now))
+                 attempts, prompt_version, proposal_id, reply_to, now))
             connection.execute(
                 "UPDATE conversations SET last_activity_at=? WHERE conversation_id=?",
                 (now, conversation_id))
@@ -468,6 +477,7 @@ def _message(row: sqlite3.Row) -> dict:
         "attempts": row["attempts"],
         "prompt_version": row["prompt_version"],
         "proposal_id": row["proposal_id"],
+        "reply_to": row["reply_to"],
         "created_at": row["created_at"],
     }
 
