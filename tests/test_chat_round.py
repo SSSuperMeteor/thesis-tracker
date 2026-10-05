@@ -395,7 +395,10 @@ def test_progress_events_describe_the_round(conversation, fixture):
     ])
     round_for(fixture, store, conv, client, progress=events.append).run()
     names = [item["event"] for item in events]
-    assert names[0] == "round_start"
+    # The model's first response is the first event: a "round started" event sent
+    # before the request carried no usage and read as "0 tokens" on the job page.
+    assert "round_start" not in names
+    assert names[0] == "round"
     assert "tool_call" in names
     assert "round" in names
     assert names[-1] == "passed"

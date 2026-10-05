@@ -910,3 +910,42 @@ ol.steps .detail { font-variant-numeric: tabular-nums; }
   margin-right: 6px;
 }
 .entry .line-label::after { content: "："; }
+
+/* A short confirmation, e.g. after copying a command.  Always in the DOM so the
+   live region is announced; it takes no room until it has text.  It sticks to the
+   bottom of the viewport (sticky, not fixed: nothing here is positioned against
+   the viewport) because the body is a column whose shell fills the screen. */
+body { display: flex; flex-direction: column; min-height: 100vh; }
+.shell { flex: 1 1 auto; }
+.toast {
+  position: sticky;
+  bottom: 16px;
+  z-index: 20;
+  align-self: center;
+  height: 0;
+  overflow: hidden;
+  background: var(--ink);
+  color: var(--surface);
+  border-radius: var(--r-ctl);
+  font-size: 13px;
+  padding: 0 14px;
+  pointer-events: none;
+}
+.toast.visible { height: auto; overflow: visible; padding: 6px 14px; margin-bottom: 16px; }
+
+/* On a narrow screen the three summary columns are 400px wide together, wider
+   than the table's own viewport; pinned, they covered every filing cell.  They
+   scroll with the table instead, and only the company column stays put. */
+@media (max-width: 899px) {
+  .tail { position: static !important; }
+  table.coverage thead tr:first-child > *:nth-last-child(-n+3) { z-index: auto; }
+}
+
+/* Free text from a person or a model (a question, a proposal's reason, an error)
+   can contain a token with no break opportunity.  It wraps inside its block
+   instead of widening the reading column and then the page. */
+.message-text, .rows-line, .section-note, .error p, .refusal p,
+.violations li, .tool-list li, .entry, .empty p, .hints p, .evidence .section-note {
+  overflow-wrap: anywhere;
+}
+.evidence .section-note { padding: 8px 12px; margin: 0; }

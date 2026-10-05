@@ -152,3 +152,11 @@ def test_usage_average_of_an_empty_archive_is_null_not_zero(tmp_path):
     usage = usage_average(tmp_path / "absent.db")
     assert usage == {"analyses": 0, "input_tokens": None, "output_tokens": None,
                      "cache_hit_tokens": None, "window": 5}
+
+
+def test_the_price_fetch_time_is_a_local_minute_string_not_an_iso_timestamp(page):
+    window = page["price"]["windows"][0]
+    assert window["retrieved_at_display"] is not None
+    assert len(window["retrieved_at_display"]) == len("2026-10-05 00:40")
+    assert "T" not in window["retrieved_at_display"]
+    assert "+00:00" not in window["retrieved_at_display"]

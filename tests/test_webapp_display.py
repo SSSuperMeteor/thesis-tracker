@@ -114,3 +114,20 @@ def test_current_rules_detection_compares_both_versions():
     assert not display.is_current_rules(current_prompt, "decision-validator-2",
                                         current_validator=current_validator,
                                         current_prompt=current_prompt)
+
+
+def test_a_chat_turn_names_its_conversation_by_a_short_id_and_hides_the_message_id():
+    parameters = {"ticker": "NVDA",
+                  "conversation_id": "55328c51-845d-49c5-9c53-6e7000bb3a61",
+                  "message_id": "81b8fe37-1694-44f9-9833-70dd687739da"}
+    assert display.parameter_summary(parameters) == "公司 NVDA｜对话 55328c51"
+    items = display.parameter_labels(parameters)
+    assert [item["key"] for item in items] == ["ticker", "conversation_id"]
+
+
+def test_no_job_summary_contains_a_full_identifier():
+    summary = display.parameter_summary({
+        "ticker": "NVDA", "conversation_id": "55328c51-845d-49c5-9c53-6e7000bb3a61",
+        "message_id": "81b8fe37-1694-44f9-9833-70dd687739da"})
+    assert "55328c51-" not in summary
+    assert "message_id" not in summary and "conversation_id" not in summary

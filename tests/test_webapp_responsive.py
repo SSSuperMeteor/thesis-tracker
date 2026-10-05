@@ -66,13 +66,16 @@ def test_the_sidebar_becomes_a_wrapping_top_bar_on_narrow_screens():
 
 
 def test_sticky_positions_are_used_only_where_the_design_calls_for_them():
-    """The header rows, the company column, three summary columns, the evidence panel."""
+    """The header rows, the company column, three summary columns, the evidence panel,
+    and the copy-confirmation toast (the one element that follows the viewport)."""
     sticky = set(re.findall(r"^([^{}]+?)\s*\{[^}]*position:\s*sticky", CSS, re.S | re.M))
     normalised = {selector.strip().split("\n")[-1].strip() for selector in sticky}
-    # Four: the sticky coverage header, the company column, the three pinned
-    # summary columns, and the evidence panel.  The evidence panel's own rows are
-    # no longer a table with a sticky head.
-    assert len(sticky) == 4, sticky
+    # Five: the sticky coverage header, the company column, the three pinned
+    # summary columns, the evidence panel, and the toast.  The toast is sticky
+    # rather than fixed on purpose (see test_nothing_is_positioned_against_the_
+    # viewport): it needs the viewport's bottom edge and nothing else.
+    assert len(sticky) == 5, sticky
+    assert ".toast" in normalised
     assert any("thead th" in selector for selector in normalised)
     assert ".stick" in normalised and ".tail" in normalised and ".evidence" in normalised
     # The pinned summary columns are offset by their neighbours' widths.

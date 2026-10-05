@@ -26,7 +26,12 @@ PARAMETER_LABELS = {
     "ticker": "公司",
     "horizon": "周期",
     "as_of": "分析截至",
+    "conversation_id": "对话",
 }
+# Identifiers that mean nothing to a reader are never listed.
+HIDDEN_PARAMETERS = frozenset({"message_id"})
+# Identifiers worth naming are shown by their first eight characters.
+SHORT_PARAMETERS = frozenset({"conversation_id"})
 
 # Horizon keys are the command line's short/mid/long; the Chinese names already
 # live in decision.evidence and are re-exported here so the backend has exactly
@@ -76,12 +81,15 @@ def format_date(value: str | None) -> str | None:
 def parameter_labels(parameters: dict) -> list[dict]:
     """Job parameters as labelled Chinese pairs, in a stable order."""
     ordered = [key for key in PARAMETER_LABELS if key in parameters]
-    ordered += [key for key in sorted(parameters) if key not in PARAMETER_LABELS]
+    ordered += [key for key in sorted(parameters)
+                if key not in PARAMETER_LABELS and key not in HIDDEN_PARAMETERS]
     items = []
     for key in ordered:
         value = parameters[key]
         if key == "horizon":
             value = horizon_label(value)
+        elif key in SHORT_PARAMETERS and value is not None:
+            value = str(value)[:8]
         items.append({"key": key, "label": PARAMETER_LABELS.get(key, key),
                       "value": "" if value is None else str(value)})
     return items

@@ -325,3 +325,33 @@ def _straddling_fact_db(tmp_path):
         connection.executemany(
             "INSERT INTO filing_snapshots VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
     return path
+
+
+def _cell(*period_ends):
+    entries = [{"period_end": end} for end in sorted(period_ends, reverse=True)]
+    return {"period_end": max(period_ends), "entries": entries}
+
+
+def test_the_gap_is_measured_between_the_adjacent_filings_not_the_newest_in_a_cell():
+    """A quarter holding two filings is entered through its *earliest* period end.
+
+    Filings on 2025-09-30 and 2026-01-05 are 97 days apart: nothing is missing
+    between them.  Comparing against the cell's newest filing (2026-03-28) read
+    that as 179 days and drew a dashed box for a quarter the issuer never skipped.
+    """
+    from thesis_tracker.webapp.service import mark_empty_cells, quarter_range
+
+    company = {"periods": {"2025Q3": _cell("2025-09-30"),
+                           "2026Q1": _cell("2026-01-05", "2026-03-28")}}
+    mark_empty_cells(company, quarter_range("2025Q3", "2026Q1"))
+    assert company["dashed_quarters"] == []
+
+
+def test_a_real_hole_is_still_marked_when_the_older_cell_holds_two_filings():
+    from thesis_tracker.webapp.service import mark_empty_cells, quarter_range
+
+    company = {"periods": {"2025Q1": _cell("2025-01-05", "2025-03-28"),
+                           "2025Q3": _cell("2025-09-30")}}
+    mark_empty_cells(company, quarter_range("2025Q1", "2025Q3"))
+    # 2025-03-28 -> 2025-09-30 is 186 days, so the quarter between them is a hole.
+    assert company["dashed_quarters"] == ["2025Q2"]

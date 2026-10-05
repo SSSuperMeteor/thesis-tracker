@@ -56,6 +56,7 @@ def conversation_view(store, conversation: dict, *, job_store=None,
                                               pricing_path=pricing_path)
                                 if pending else None)
     view["evidence"] = evidence_view(store, conversation_id)
+    view["turn"] = turn_view(store, job_store, conversation_id)
     if include_messages:
         messages = store.messages(conversation_id)
         view["messages"] = [message_view(item, store=store, pricing=pricing)
@@ -63,6 +64,41 @@ def conversation_view(store, conversation: dict, *, job_store=None,
         view["history"] = history_note(len(messages))
         view["startup"] = startup_view(store, conversation, job_store=job_store,
                                        pricing_path=pricing_path)
+    return view
+
+
+TURN_LABELS = {"queued": "已排队，等待回答", "running": "正在回答"}
+
+
+def turn_view(store, job_store, conversation_id: str) -> dict:
+    """Where the newest question stands, so the page can wait for it honestly.
+
+    The answer is written by a worker some time after the question, so a page
+    that only reads messages cannot tell "still working" from "never answered".
+    A turn that ended with a stored refusal needs no notice here, because the
+    refusal is itself a message; a turn that ended with *nothing* (the model
+    could not be reached, the software restarted) is the case that would
+    otherwise leave a question sitting there silently.
+    """
+    idle = {"status": "idle", "in_flight": False, "label": None, "error": None,
+            "job_id": None, "message_id": None}
+    if job_store is None:
+        return idle
+    jobs = job_store.chat_jobs(conversation_id)
+    if not jobs:
+        return idle
+    latest = jobs[0]
+    status = latest["status"]
+    message_id = (latest.get("parameters") or {}).get("message_id")
+    view = {"status": status, "in_flight": status in TURN_LABELS,
+            "label": TURN_LABELS.get(status), "error": None,
+            "job_id": latest["job_id"], "message_id": message_id}
+    if status in {"failed", "interrupted"}:
+        answered = any(item.get("reply_to") == message_id
+                       for item in store.messages(conversation_id))
+        if not answered:
+            reason = (latest.get("error") or "没有给出原因。")
+            view["error"] = f"这条消息没有得到回答：{reason}可以再问一次。"
     return view
 
 

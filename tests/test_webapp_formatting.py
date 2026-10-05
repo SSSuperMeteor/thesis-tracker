@@ -148,3 +148,21 @@ def test_a_job_view_exposes_the_short_card_id_and_the_full_one(tmp_path):
     view = job_view(store.get(job["job_id"]))
     assert view["result"]["card_id"] == card_id
     assert view["result"]["card_id_short"] == "48f0260e"
+
+
+def test_a_progress_event_that_ended_a_run_carries_a_plain_reason():
+    """The job page must not print a raw code such as ``correction_limit``."""
+    from thesis_tracker.webapp.service import job_view
+
+    job = {"job_id": "j" * 36, "kind": "analyze", "kind_label": "生成建议卡",
+           "status": "failed", "status_label": "失败",
+           "parameters": {"ticker": "NVDA"}, "created_at": None, "started_at": None,
+           "finished_at": None, "result": None, "error": "x",
+           "progress": [{"event": "rejected", "reason": "correction_limit",
+                         "rules": ["D02"], "at": "2026-10-05T00:00:00+00:00"},
+                        {"event": "rejected", "reason": "brand_new_reason", "rules": []}]}
+    first, second = job_view(job)["progress"]
+    assert first["reason_label"] == "连续多次修正仍未通过校验"
+    assert "correction_limit" not in first["reason_label"]
+    # An unknown code is still reported, in words that say it is unknown.
+    assert "brand_new_reason" in second["reason_label"]

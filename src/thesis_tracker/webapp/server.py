@@ -321,6 +321,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "找不到请求的对象。"})
         elif isinstance(exc, FileNotFoundError):
             self._json(503, {"error": "本地数据库不存在，请先在终端运行采集命令。"})
+        elif isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc):
+            # Another program (typically prices-ingest) holds the write lock for a
+            # moment; the data is fine and the next try will usually succeed.
+            self._json(503, {"error": "本地数据库正被另一个程序占用（例如正在运行 "
+                                      "prices-ingest），请稍后重试。"})
         elif isinstance(exc, sqlite3.Error):
             self._json(500, {"error": "本地数据库不可读取。"})
         elif isinstance(exc, ValueError):
@@ -411,11 +416,21 @@ class _Handler(BaseHTTPRequestHandler):
         if conversation["archived"]:
             self._json(400, {"error": "这个对话已归档，不能再发消息。"})
             return
-        message = app.chat.append_message(conversation_id, role="user",
-                                          text=text.strip())
-        job = app.store.create(KIND_CHAT_TURN, {
-            "conversation_id": conversation_id, "message_id": message["message_id"],
-            "ticker": conversation["ticker"]})
+        # One turn at a time per conversation: a second question queued behind an
+        # unanswered one would be answered against the wrong history.  The lock
+        # makes the check and the insert one step for two simultaneous requests.
+        with app.send_lock:
+            if chat_service.turn_view(app.chat, app.store,
+                                      conversation_id)["in_flight"]:
+                self._json(409, {"error": "上一条消息还在回答中，等它结束后再发。"})
+                return
+            message = app.chat.append_message(conversation_id, role="user",
+                                              text=text.strip())
+            job = app.store.create(KIND_CHAT_TURN, {
+                "conversation_id": conversation_id,
+                "message_id": message["message_id"],
+                "ticker": conversation["ticker"]})
+        app.wake_workers()
         self._json(200, {"message": chat_service.message_view(
             message, store=app.chat), "job": service.job_view(app.store.get(
                 job["job_id"]))})
@@ -741,6 +756,7 @@ class WebApp:
         self.store = JobStore(self.job_db)
         self.chat = ChatStore(self.chat_db)
         self._ticker_cache: list[str] | None = None
+        self.send_lock = threading.Lock()
         self._httpd = _Server((host, port), _Handler)
         self._httpd.app = self  # type: ignore[attr-defined]
         self._worker = (AnalysisWorker(self.store, archive_path=self.card_db,

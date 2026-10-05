@@ -161,6 +161,12 @@ def _coverage_cell(quarter: str, rows: list[dict]) -> dict:
     }
 
 
+def window_views(windows: list[dict]) -> list[dict]:
+    """Stored fetch windows with the fetch time as a local minute string."""
+    return [{**window, "retrieved_at_display": display.format_timestamp(
+        window.get("retrieved_at"))} for window in windows]
+
+
 def price_summary(price_db: Path | str, ticker: str, reference_date: str) -> dict:
     """Stored price range, newest price and D03-consistent expiry for one ticker."""
     bounds = store.price_bounds(price_db).get(ticker.upper())
@@ -182,7 +188,7 @@ def price_summary(price_db: Path | str, ticker: str, reference_date: str) -> dic
         return {"available": False, "start_date": None, "end_date": None, "rows": 0,
                 "latest_date": None, "latest_close": None, "age_days": None,
                 "stale": True, "reason": "mixed_batches",
-                "windows": store.price_windows(price_db, ticker)}
+                "windows": window_views(store.price_windows(price_db, ticker))}
     age = (date.fromisoformat(reference_date) - date.fromisoformat(bounds["end_date"])).days
     return {
         "available": True,
@@ -194,7 +200,7 @@ def price_summary(price_db: Path | str, ticker: str, reference_date: str) -> dic
         "age_days": age,
         "stale": age > PRICE_STALENESS_DAYS,
         "reason": None,
-        "windows": store.price_windows(price_db, ticker),
+        "windows": window_views(store.price_windows(price_db, ticker)),
     }
 
 
@@ -268,11 +274,16 @@ def mark_empty_cells(company: dict, quarters: list[str]) -> None:
     dashed: set[str] = set()
     for index in range(len(reported) - 1):
         left, right = reported[index], reported[index + 1]
-        left_end = date.fromisoformat(periods[left]["period_end"])
-        right_end = date.fromisoformat(periods[right]["period_end"])
-        # The hole is what lies strictly between the two period ends, and it is
-        # wide only when the issuer's own two filings are more than the threshold
-        # apart: the later period end minus the earlier one.
+        # The two filings that bracket the hole are the *adjacent* ones: the newest
+        # period end of the earlier column and the oldest of the later column.  A
+        # column holding two filings is entered through its first one, so a second
+        # filing later in the same quarter cannot widen a gap that is not there.
+        left_end = max(date.fromisoformat(entry["period_end"])
+                       for entry in periods[left]["entries"])
+        right_end = min(date.fromisoformat(entry["period_end"])
+                        for entry in periods[right]["entries"])
+        # The hole is wide only when the issuer's own two adjacent filings are
+        # more than the threshold apart.
         if (right_end - left_end).days <= EMPTY_GAP_DAYS:
             continue
         dashed.update(quarters[quarters.index(left) + 1:quarters.index(right)])
@@ -807,6 +818,33 @@ def usage_average(card_db: Path | str = DEFAULT_ARCHIVE, *,
     }
 
 
+# Why a run stopped without a result, in words.  The codes are the ones the
+# analysis loop and the chat round both emit; an unknown code is shown with its
+# own name so a new one is visible rather than hidden.
+STOP_REASON_LABELS = {
+    "base_envelope_limit": "基础数据包超过上限",
+    "token_limit": "累计 token 超过上限",
+    "token_soft_limit": "累计 token 超过软上限，不能再调用工具",
+    "request_input_limit": "单次请求的输入超过上限，没有发送请求",
+    "model_error": "模型调用失败",
+    "usage_unavailable": "模型没有返回可核算的用量",
+    "tool_limit": "工具调用次数达到上限",
+    "correction_limit": "连续多次修正仍未通过校验",
+    "round_limit": "轮数达到上限",
+}
+
+
+def stop_reason_label(code) -> str:
+    return STOP_REASON_LABELS.get(code, f"未知原因（{code}）")
+
+
+def _event_view(event: dict) -> dict:
+    view = {**event, "at_display": display.format_timestamp(event.get("at"))}
+    if event.get("event") == "rejected":
+        view["reason_label"] = stop_reason_label(event.get("reason"))
+    return view
+
+
 def job_view(job: dict) -> dict:
     """A stored job with display strings attached.
 
@@ -825,8 +863,7 @@ def job_view(job: dict) -> dict:
         "finished_at": display.format_timestamp(job.get("finished_at")),
         "parameters": display.parameter_labels(job.get("parameters") or {}),
         "parameter_summary": display.parameter_summary(job.get("parameters") or {}),
-        "progress": [{**event, "at_display": display.format_timestamp(event.get("at"))}
-                     for event in job.get("progress") or []],
+        "progress": [_event_view(event) for event in job.get("progress") or []],
     }
     if isinstance(result, dict):
         view["result"] = {

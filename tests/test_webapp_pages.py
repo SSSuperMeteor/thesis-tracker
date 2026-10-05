@@ -174,3 +174,59 @@ def test_the_page_header_wraps_instead_of_clipping_its_second_line():
     meta = re.search(r"\.page-head \.meta\s*\{([^}]*)\}", css)
     assert meta is not None
     assert "white-space: nowrap" not in meta.group(1)
+
+
+
+def test_a_locked_database_is_reported_as_busy_with_a_way_forward(tmp_path, monkeypatch):
+    """prices-ingest writing to prices.db for a moment is not "unreadable"."""
+    import sqlite3
+
+    from test_webapp_security import TOKEN, json_body
+    from webapp_fixtures import build_fixture
+
+    from thesis_tracker.webapp.server import WebApp
+
+    fixture = build_fixture(tmp_path / "fixture")
+
+    def locked(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("thesis_tracker.webapp.service.store.price_bounds", locked)
+    app = WebApp(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                 card_db=fixture.card_db, job_db=tmp_path / "jobs.db", token=TOKEN,
+                 port=0, start_worker=False)
+    app.start()
+    try:
+        status, payload = json_body(app, "/api/overview")
+    finally:
+        app.stop()
+    assert status == 503
+    assert "占用" in payload["error"]
+    assert "稍后" in payload["error"]
+
+
+def test_a_database_that_is_not_locked_but_broken_keeps_the_generic_message(
+        tmp_path, monkeypatch):
+    import sqlite3
+
+    from test_webapp_security import TOKEN, json_body
+    from webapp_fixtures import build_fixture
+
+    from thesis_tracker.webapp.server import WebApp
+
+    fixture = build_fixture(tmp_path / "fixture")
+
+    def broken(*_args, **_kwargs):
+        raise sqlite3.DatabaseError("file is not a database")
+
+    monkeypatch.setattr("thesis_tracker.webapp.service.store.price_bounds", broken)
+    app = WebApp(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                 card_db=fixture.card_db, job_db=tmp_path / "jobs.db", token=TOKEN,
+                 port=0, start_worker=False)
+    app.start()
+    try:
+        status, payload = json_body(app, "/api/overview")
+    finally:
+        app.stop()
+    assert status == 500
+    assert "不可读取" in payload["error"]

@@ -100,6 +100,16 @@ class JobStore:
             rows = connection.execute(query, parameters).fetchall()
         return [_row_to_job(row) for row in rows]
 
+    def chat_jobs(self, conversation_id: str) -> list[dict]:
+        """Every chat turn of one conversation, newest first."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM jobs WHERE kind=? AND "
+                "json_extract(parameters_json, '$.conversation_id')=? "
+                "ORDER BY created_at DESC, rowid DESC",
+                (KIND_CHAT_TURN, conversation_id)).fetchall()
+        return [_row_to_job(row) for row in rows]
+
     def queued(self) -> list[dict]:
         with self._connect() as connection:
             rows = connection.execute(

@@ -91,11 +91,40 @@ function loadingBox() {
   ]);
 }
 
+let toastTimer = null;
+
+/* A light confirmation that disappears by itself after two seconds.  It lives in
+   one aria-live region, so a screen reader hears it and nothing else moves. */
+function toast(text) {
+  const region = document.getElementById("toast");
+  if (!region) return;
+  region.textContent = text;
+  region.classList.add("visible");
+  if (toastTimer !== null) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    region.textContent = "";
+    region.classList.remove("visible");
+    toastTimer = null;
+  }, 2000);
+}
+
+async function copyText(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(done);
+  } catch {
+    toast(`无法自动复制，请手动输入：${text}`);
+  }
+}
+
 /* ------------------------------------------------------------------ api */
 
 async function api(path, options = {}) {
   const init = { credentials: "same-origin", headers: { Accept: "application/json" } };
   if (options.body !== undefined) {
+    // api() serialises the body itself; a caller that already did would send a
+    // JSON string, which the server rightly refuses as "not an object".
+    if (typeof options.body === "string") throw new TypeError("api(): pass an object body");
     init.method = "POST";
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(options.body);
@@ -111,6 +140,37 @@ async function api(path, options = {}) {
   return payload;
 }
 
+/* Route generations and polling.
+ *
+ * Every navigation bumps ``generation``.  A view reads it once when it starts and
+ * fetches through ``load(path, mine)``: if the reader has moved on by the time the
+ * response arrives, the view stops instead of painting an old page over the new
+ * one.  Polling is one timer for the whole app, replaced (never added to) each
+ * time a view asks for another look, and cancelled by the next navigation, so
+ * leaving and re-entering a page can never stack up several refresh chains. */
+let generation = 0;
+let pollTimer = null;
+const STALE = Symbol("stale-route");
+
+async function load(path, mine) {
+  const payload = await api(path);
+  if (mine !== generation) throw STALE;
+  return payload;
+}
+
+function stopPolling() {
+  if (pollTimer !== null) clearTimeout(pollTimer);
+  pollTimer = null;
+}
+
+function pollAgain(milliseconds, mine) {
+  stopPolling();
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    if (mine === generation) route({ poll: true });
+  }, milliseconds);
+}
+
 /* ------------------------------------------------------------- fragments */
 
 function pageHead(title, meta) {
@@ -120,7 +180,7 @@ function pageHead(title, meta) {
   ]);
 }
 
-function panelSection(title, children, note, action) {
+function panelSection(title, children, note, action, after) {
   return el("section", { class: "section" }, [
     action
       ? el("div", { class: "section-head" }, [
@@ -131,6 +191,7 @@ function panelSection(title, children, note, action) {
       : el("h2", { text: title }),
     note ? el("p", { class: "section-note", text: note }) : null,
     ...[].concat(children),
+    after || null,
   ]);
 }
 
@@ -187,16 +248,8 @@ function priceBanner(overview) {
     : `${String(missing)} 家公司没有价格数据；在终端运行 ${overview.price_command}，需要运行两次。`;
   const extra = newest && missing ? `另有 ${String(missing)} 家公司没有价格数据。` : "";
 
-  const status = el("span", { class: "meta", text: "" });
   const button = el("button", { type: "button", class: "small", text: "复制命令" });
-  button.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(overview.price_command);
-      status.textContent = "命令已复制。";
-    } catch {
-      status.textContent = `无法自动复制，请手动输入：${overview.price_command}`;
-    }
-  });
+  button.addEventListener("click", () => copyText(overview.price_command, "命令已复制"));
 
   return el("div", { class: "banner", role: "status" }, [
     showState("stale", detail),
@@ -204,14 +257,14 @@ function priceBanner(overview) {
     button,
     el("span", { class: "section-note", text: hint }),
     extra ? el("span", { class: "section-note", text: extra }) : null,
-    status,
   ]);
 }
 
 /* ------------------------------------------------------------- overview */
 
 async function viewOverview(host) {
-  const overview = await api("/api/overview");
+  const mine = generation;
+  const overview = await load("/api/overview", mine);
   clear(host);
   const banner = priceBanner(overview);
   if (banner) host.append(banner);
@@ -304,8 +357,23 @@ async function viewOverview(host) {
   // The newest quarters matter most, so the table opens at that end instead of
   // at 2014.  The company and summary columns are pinned, so nothing is hidden.
   const scroller = host.querySelector(".table-scroll");
-  if (scroller) scroller.scrollLeft = scroller.scrollWidth;
+  if (scroller) revealNewestQuarter(scroller);
   document.title = "总览｜Thesis Tracker";
+}
+
+/* Scroll so the newest quarter's column ends at the right edge of what is
+   visible.  Scrolling all the way right would be wrong whenever the summary
+   columns are not pinned: it would show them and hide the quarters. */
+function revealNewestQuarter(scroller) {
+  const cells = scroller.querySelectorAll("tbody tr:first-child td.cell");
+  const last = cells[cells.length - 1];
+  if (!last) return;
+  let pinned = 0;
+  for (const tail of scroller.querySelectorAll("tbody tr:first-child td.tail")) {
+    if (getComputedStyle(tail).position === "sticky") pinned += tail.offsetWidth;
+  }
+  scroller.scrollLeft += last.getBoundingClientRect().right + pinned
+    - scroller.getBoundingClientRect().right;
 }
 
 function coverageLegend(overview) {
@@ -353,20 +421,22 @@ function renderCell(period, className, ticker, dashed, gapDays) {
 /* -------------------------------------------------------------- company */
 
 /* 一个公司页上的对话段：新建对话、历史列表、累计用量。 */
-function chatSection(page, host, conversations) {
+function chatSection(page, host, conversations, loadError) {
   const newButton = el("button", { type: "button", class: "primary", text: "新建对话" });
   newButton.addEventListener("click", async () => {
     newButton.disabled = true;
     try {
       const created = await api("/api/companies/conversations", {
-        method: "POST", body: JSON.stringify({ ticker: page.ticker }),
+        body: { ticker: page.ticker },
       });
       location.hash = `#/chat/${created.conversation.conversation_id}`;
     } catch (error) {
       newButton.disabled = false;
-      host.append(errorBox(error.message));
+      notice.replaceChildren(errorBox(error.message));
     }
   });
+  const notice = el("div", { class: "notice", "aria-live": "polite" },
+    loadError ? errorBox(`对话列表读取失败：${loadError}`) : null);
   const rows = conversations.map((item) => el("tr", {}, [
     el("td", {}, el("a", { href: `#/chat/${item.conversation_id}`, text: item.title })),
     el("td", { text: String(item.messages_count) }),
@@ -380,11 +450,24 @@ function chatSection(page, host, conversations) {
   return panelSection("对话", conversations.length
     ? table([{ label: "标题" }, { label: "条数" }, { label: "输入 / 输出 token" },
       { label: "费用" }, { label: "最近活动" }, { label: "待确认" }], rows)
-    : emptyBox("还没有对话。", "新建一个对话，只讨论这家公司。"), null, newButton);
+    : emptyBox("还没有对话。", "新建一个对话，只讨论这家公司。"), null, newButton,
+  notice);
 }
 
 async function viewCompany(host, ticker) {
-  const page = await api(`/api/companies/${encodeURIComponent(ticker)}`);
+  const mine = generation;
+  const page = await load(`/api/companies/${encodeURIComponent(ticker)}`, mine);
+  // Fetched before anything is drawn, so a slow second request can never leave a
+  // half-built page behind.  A failure is reported on the page, not swallowed.
+  let conversations = [];
+  let conversationError = null;
+  try {
+    conversations = (await load(
+      `/api/companies/conversations?ticker=${encodeURIComponent(page.ticker)}`, mine)).conversations;
+  } catch (error) {
+    if (error === STALE) throw error;
+    conversationError = error.message;
+  }
   clear(host);
   const price = page.price;
   host.append(pageHead(
@@ -425,44 +508,41 @@ async function viewCompany(host, ticker) {
     row("数据范围", price.start_date ? `${price.start_date} 至 ${price.end_date}` : "没有价格数据"),
     row("行数", price.available ? String(price.rows) : "—"),
     row("最新收盘价", price.latest_close, true),
-    row("抓取时间", window ? `${window.retrieved_at}（${window.provider}）` : "—"),
+    row("抓取时间", window ? `${window.retrieved_at_display}（${window.provider}）` : "—"),
     row("过期阈值", `${String(page.stale_after_days)} 个日历日（与校验器 D03 同一常量）`),
   ])));
 
   const metrics = page.fundamentals;
   const metricRows = metrics.metrics.map((metric) => el("tr", {}, [
-    el("th", { scope: "row", text: metric.label }),
+    // The full fact id stays reachable as a tooltip; its first eight characters
+    // are the same prefix for every metric and say nothing.
+    el("th", { scope: "row", text: metric.label, title: metric.fact_id ? `来源 ${metric.fact_id}` : undefined }),
     el("td", { class: "num" }, quantity(metric.display)),
     el("td", { class: "num", text: metric.period_end || "—" }),
-    el("td", { text: metric.fact_id ? metric.fact_id.slice(0, 8) : "—", class: "mono", translate: false }),
     el("td", {}, statusState(metric.status)),
     el("td", { class: "reason", text: metric.reason ? metric.reason.message : "" }),
   ]));
   host.append(panelSection("可算的财务指标", table(
     [{ label: "指标" }, { label: "最新值", numeric: true }, { label: "财期截止", numeric: true },
-      { label: "事实编号" }, { label: "状态" }, { label: "算不出的原因" }],
+      { label: "状态" }, { label: "算不出的原因" }],
     metricRows,
   ), `最新财期披露日 ${metrics.data_end_date || "—"}。`));
 
-  let conversations = [];
-  try {
-    conversations = (await api(`/api/companies/conversations?ticker=${encodeURIComponent(page.ticker)}`)).conversations;
-  } catch (error) {
-    conversations = [];
-  }
-  host.append(chatSection(page, host, conversations));
+  host.append(chatSection(page, host, conversations, conversationError));
 
   const cards = page.cards;
   host.append(panelSection("建议卡", cards.length
     ? table([{ label: "创建时间" }, { label: "周期" }, { label: "动作" }, { label: "倾向" },
-      { label: "校验器" }, { label: "提示词版本" }, { label: "" }],
+      { label: "规则版本" }, { label: "" }],
     cards.map((card) => el("tr", {}, [
       el("td", { text: card.created_at }),
       el("td", { text: card.horizon }),
       el("td", { text: card.action }),
       el("td", { text: card.bias }),
-      el("td", { class: "mono", text: card.validator_version }),
-      el("td", { class: "mono", text: card.prompt_version }),
+      el("td", {}, [
+        el("span", { text: card.version_mark }),
+        card.rules_label ? el("span", { class: "tag", text: card.rules_label }) : null,
+      ]),
       el("td", {}, el("a", { href: `#/cards/${card.card_id}`, text: "查看" })),
     ])))
     : emptyBox("还没有这家公司的建议卡。", "选择周期后点击生成建议卡。")));
@@ -471,22 +551,13 @@ async function viewCompany(host, ticker) {
 
 /* 一个短编号加一个复制按钮：完整编号只在按钮里出现，行里不重复。 */
 function copyRow(label, short, full) {
-  const status = el("span", { class: "meta", text: "" });
   const button = el("button", { type: "button", class: "small", text: "复制完整编号" });
-  button.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(full);
-      status.textContent = "已复制。";
-    } catch {
-      status.textContent = `无法自动复制，完整编号：${full}`;
-    }
-  });
+  button.addEventListener("click", () => copyText(full, "编号已复制"));
   return el("div", { class: "row" }, [
     el("span", { class: "label", text: label }),
     el("span", { class: "value" }, [
       el("span", { class: "mono", translate: false, text: short }),
       button,
-      status,
     ]),
   ]);
 }
@@ -554,10 +625,11 @@ function openAnalysisDialog(ticker, host) {
 /* ------------------------------------------------------------ card list */
 
 async function viewCards(host, query) {
+  const mine = generation;
   const params = new URLSearchParams(query || "");
   const ticker = params.get("ticker") || "";
   const horizon = params.get("horizon") || "";
-  const cards = (await api(`/api/cards${query ? `?${query}` : ""}`)).cards;
+  const cards = (await load(`/api/cards${query ? `?${query}` : ""}`, mine)).cards;
   clear(host);
   host.append(pageHead("建议卡", `共 ${String(cards.length)} 张`));
 
@@ -612,7 +684,8 @@ async function viewCards(host, query) {
 /* ---------------------------------------------------------- card detail */
 
 async function viewCard(host, cardId) {
-  const card = await api(`/api/cards/${encodeURIComponent(cardId)}`);
+  const mine = generation;
+  const card = await load(`/api/cards/${encodeURIComponent(cardId)}`, mine);
   clear(host);
   const evidenceRows = new Map();
   const pick = (factId) => {
@@ -809,7 +882,8 @@ function priceBand(band) {
 let runningJobs = 0;
 
 async function viewJobs(host) {
-  const jobs = (await api("/api/jobs")).jobs;
+  const mine = generation;
+  const jobs = (await load("/api/jobs", mine)).jobs;
   runningJobs = jobs.filter((job) => job.status === "running").length;
   renderNav();
   clear(host);
@@ -843,7 +917,9 @@ function jobState(job) {
   return showState("missing", job.status_label);
 }
 
-function stepLine(event) {
+const TOOL_STATUS = { ok: "成功", error: "失败" };
+
+function stepLine(event, kind) {
   const when = event.at_display ? `${event.at_display}　` : "";
   if (event.event === "prefetch") {
     return ["准备", `${when}读取本地数据 ${String(event.tool_calls)} 次`];
@@ -863,22 +939,25 @@ function stepLine(event) {
   if (event.event === "tool_call") {
     const args = event.args ? Object.entries(event.args)
       .map(([key, value]) => `${key} ${String(value)}`).join("，") : "";
-    return ["工具", `${event.tool} ${args}｜${String(event.bytes)} 字节｜${event.status}`];
+    return ["工具", `${event.tool} ${args}｜${String(event.bytes)} 字节｜${TOOL_STATUS[event.status] || event.status}`];
   }
   if (event.event === "draft_rejected") {
     return ["校验", `第 ${String(event.attempt)} 稿被拒：${(event.rules || []).join("、")}`];
   }
   if (event.event === "passed") {
+    // A chat turn publishes an answer; only an analysis archives a card.
+    if (kind === "chat_turn") return ["完成", "回答已发布"];
     return ["完成", `建议卡已生成｜存档编号 ${event.card_id}`];
   }
   if (event.event === "rejected") {
-    return ["拒绝", `原因 ${event.reason}${(event.rules || []).length ? `｜规则 ${(event.rules || []).join("、")}` : ""}`];
+    return ["拒绝", `原因：${event.reason_label}${(event.rules || []).length ? `｜规则 ${(event.rules || []).join("、")}` : ""}`];
   }
   return ["其他", "这一步没有可显示的说明"];
 }
 
 async function viewJob(host, jobId) {
-  const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
+  const mine = generation;
+  const job = await load(`/api/jobs/${encodeURIComponent(jobId)}`, mine);
   clear(host);
   host.append(pageHead(job.kind_label, null));
   host.append(el("div", { class: "rows" }, [
@@ -890,7 +969,7 @@ async function viewJob(host, jobId) {
   ]));
   host.append(panelSection("进度", el("div", { class: "panel" }, [
     el("ol", { class: "steps", "aria-live": "polite" }, job.progress.map((event) => {
-      const [kind, detail] = stepLine(event);
+      const [kind, detail] = stepLine(event, job.kind);
       return el("li", {}, [
         el("span", { class: "kind", text: kind }),
         el("span", { class: "detail", text: detail }),
@@ -919,9 +998,7 @@ async function viewJob(host, jobId) {
       ]),
     ].filter(Boolean))));
   }
-  if (job.status === "running" || job.status === "queued") {
-    setTimeout(() => { if (location.hash === `#/jobs/${jobId}`) viewJob(host, jobId).catch(showError(host)); }, 1500);
-  }
+  if (job.status === "running" || job.status === "queued") pollAgain(1500, mine);
   document.title = "任务｜Thesis Tracker";
 }
 
@@ -996,52 +1073,46 @@ function messageBlock(view, pick) {
 
 function proposalPanel(proposal, host, conversationId) {
   if (!proposal) return null;
-  const actions = [];
-  if (proposal.confirmable) {
-    actions.push(el("button", { type: "button", class: "primary", text: "确认生成" }));
-    actions.push(el("button", { type: "button", text: "忽略" }));
-  } else {
-    actions.push(el("span", { class: "section-note", text: `已处理：${proposal.status_label}` }));
-  }
+  if (!proposal.confirmable) return decidedProposal(proposal);
+  const confirm = el("button", { type: "button", class: "primary", text: "确认生成" });
+  const dismiss = el("button", { type: "button", text: "忽略" });
   const panel = el("section", { class: "proposal", "aria-label": "生成建议卡的提议" }, [
     el("h2", { text: "AI 提议生成新的建议卡" }),
     el("p", { class: "rows-line", text: `周期 ${proposal.horizon_label}｜${proposal.reason}` }),
     el("p", { class: "section-note", text: proposal.estimate }),
-    el("div", { class: "proposal-actions" }, actions),
+    el("div", { class: "proposal-actions" }, [confirm, dismiss]),
   ]);
-  if (!proposal.confirmable) return panel;
-  const [confirm, dismiss] = actions;
-  confirm.addEventListener("click", async () => {
+  const decide = (path) => async () => {
     confirm.disabled = true;
     dismiss.disabled = true;
     try {
-      await api("/api/proposals/confirm", {
-        method: "POST",
-        body: JSON.stringify({ proposal_id: proposal.proposal_id }),
-      });
-      await viewChat(host, conversationId);
+      await api(path, { body: { proposal_id: proposal.proposal_id } });
+      await route({ poll: true });
     } catch (error) {
       confirm.disabled = false;
       dismiss.disabled = false;
       panel.append(errorBox(error.message));
     }
-  });
-  dismiss.addEventListener("click", async () => {
-    confirm.disabled = true;
-    dismiss.disabled = true;
-    try {
-      await api("/api/proposals/dismiss", {
-        method: "POST",
-        body: JSON.stringify({ proposal_id: proposal.proposal_id }),
-      });
-      await viewChat(host, conversationId);
-    } catch (error) {
-      confirm.disabled = false;
-      dismiss.disabled = false;
-      panel.append(errorBox(error.message));
-    }
-  });
+  };
+  confirm.addEventListener("click", decide("/api/proposals/confirm"));
+  dismiss.addEventListener("click", decide("/api/proposals/dismiss"));
   return panel;
+}
+
+/* A proposal that has been decided stays on the page, quietly: the reader should
+   be able to see what they chose and, for a confirmed one, where the analysis is. */
+function decidedProposal(proposal) {
+  const where = proposal.job_id
+    ? el("a", { href: `#/jobs/${proposal.job_id}`,
+      text: `任务${proposal.job_status_label ? `：${proposal.job_status_label}` : ""}` })
+    : null;
+  return el("section", { class: "proposal decided", "aria-label": "生成建议卡的提议" }, [
+    el("p", { class: "rows-line" }, [
+      el("span", { class: "who", text: `已处理：${proposal.status_label}` }),
+      el("span", { text: `｜周期 ${proposal.horizon_label}｜${proposal.reason}` }),
+    ]),
+    where ? el("p", { class: "section-note" }, where) : null,
+  ]);
 }
 
 function usageTable(usage) {
@@ -1069,14 +1140,22 @@ function usageTable(usage) {
   ]);
 }
 
-function composer(startup, host, conversationId) {
+function composer(startup, host, conversationId, turn) {
   const input = el("textarea", {
     class: "chat-input", rows: "3",
     placeholder: "问这家公司的问题，例如：现在距离止损还有多远？",
     "aria-label": "向这家公司提问",
   });
   const submit = el("button", { type: "button", class: "primary", text: "发送" });
-  const status = el("p", { class: "section-note", text: startup.billing_note });
+  // While a turn is in flight the server refuses a second question, so the form
+  // says why it is waiting instead of looking broken.
+  const waiting = turn.in_flight;
+  if (waiting) {
+    input.disabled = true;
+    submit.disabled = true;
+  }
+  const status = el("p", { class: "section-note", role: "status",
+    text: waiting ? `${turn.label}…` : startup.billing_note });
   const form = el("div", { class: "composer" }, [
     input,
     el("div", { class: "composer-row" }, [
@@ -1094,10 +1173,10 @@ function composer(startup, host, conversationId) {
     status.textContent = "已发送，正在回答…";
     try {
       await api(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
-        method: "POST", body: JSON.stringify({ text }),
+        body: { text },
       });
       input.value = "";
-      await viewChat(host, conversationId);
+      await route({ poll: true });
     } catch (error) {
       submit.disabled = false;
       input.disabled = false;
@@ -1116,12 +1195,15 @@ function composer(startup, host, conversationId) {
 }
 
 async function viewChat(host, conversationId) {
-  const page = await api(`/api/conversations/${encodeURIComponent(conversationId)}`);
+  const mine = generation;
+  const page = await load(`/api/conversations/${encodeURIComponent(conversationId)}`, mine);
   clear(host);
   const rows = new Map();
   const pick = (segment) => {
-    const key = segment.fact_id || `card|${segment.card_id}`;
-    const row = rows.get(key) || rows.get(segment.fact_id);
+    // A card field's evidence row is keyed card|<card id>|<field>, the same id the
+    // backend gave it; looking it up by card alone found nothing.
+    const key = segment.fact_id || `card|${segment.card_id}|${segment.field}`;
+    const row = rows.get(key);
     if (!row) return;
     row.scrollIntoView({ block: "center", behavior: "smooth" });
     row.focus({ preventScroll: true });
@@ -1148,11 +1230,15 @@ async function viewChat(host, conversationId) {
         });
         return button;
       })),
-    proposalPanel(page.pending_proposal, host, conversationId),
+    ...page.proposals.map((proposal) => proposalPanel(proposal, host, conversationId)),
+    page.turn.error
+      ? el("div", { class: "error", role: "alert" }, [
+        showState("error", "没有得到回答"), el("p", { text: page.turn.error })])
+      : null,
     page.messages.length < startup.history_window
       ? null
       : el("p", { class: "section-note", text: page.history.note }),
-    composer(startup, host, conversationId),
+    composer(startup, host, conversationId, page.turn),
     el("details", { class: "usage" }, [
       el("summary", { text: "用量与费用" }),
       usageTable(page.usage),
@@ -1209,6 +1295,11 @@ async function viewChat(host, conversationId) {
     ]),
   );
   document.title = `${page.ticker} 对话｜Thesis Tracker`;
+  // A confirmed proposal's analysis finishes on its own schedule; keep looking
+  // until it has been announced in the conversation.
+  const analysing = page.proposals.some((proposal) => proposal.status === "confirmed"
+    && !proposal.card_id && ["queued", "running"].includes(proposal.job_status));
+  if (page.turn.in_flight || analysing) pollAgain(1500, mine);
 }
 
 /* -------------------------------------------------------------- routing */
@@ -1243,7 +1334,9 @@ function showError(host) {
   };
 }
 
-async function route() {
+async function route(options = {}) {
+  generation += 1;
+  stopPolling();
   const host = document.getElementById("main");
   const raw = location.hash.replace(/^#/, "") || "/overview";
   const [path, query] = raw.split("?");
@@ -1251,7 +1344,11 @@ async function route() {
   if (path === "/jobs" || head === "jobs") renderNav("#/jobs");
   else if (head === "cards") renderNav("#/cards");
   else renderNav("#/overview");
+  const known = (head === undefined || head === "" || head === "overview"
+    || ((head === "company" || head === "chat") && tail)
+    || head === "cards" || head === "jobs");
   try {
+    if (!known) throw new Error("没有这个页面。地址可能输错了，可以回到总览。");
     if (head === "company" && tail) await viewCompany(host, decodeURIComponent(tail));
     else if (head === "cards" && tail) await viewCard(host, decodeURIComponent(tail));
     else if (head === "cards") await viewCards(host, query);
@@ -1260,11 +1357,13 @@ async function route() {
     else if (head === "jobs") await viewJobs(host);
     else await viewOverview(host);
   } catch (error) {
-    showError(host)(error);
+    // A navigation that overtook this one is not an error, just a view the reader
+    // no longer wants.
+    if (error !== STALE) showError(host)(error);
   }
 }
 
-window.addEventListener("hashchange", route);
+window.addEventListener("hashchange", () => route());
 if (document.readyState === "loading") {
   window.addEventListener("DOMContentLoaded", () => { renderNav(); route(); });
 } else {

@@ -125,9 +125,6 @@ class ChatRound:
                               [_error("L02", "tokens", "本回合累计 token 超过上限。")],
                               attempt_log)
             self.stats["rounds"] += 1
-            self.emit({"event": "round_start", "round": self.stats["rounds"],
-                       "input_tokens": self.stats["input_tokens"],
-                       "output_tokens": self.stats["output_tokens"]})
             try:
                 response = self.client.complete(messages=messages, tools=schemas,
                                                 max_tokens=DEFAULT_MAX_TOKENS)
