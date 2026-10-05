@@ -96,6 +96,31 @@ async function leaks(page, scope = "#main") {
   await context.close();
 }
 
+// ---- chart axis labels never overlap, wide or narrow ---------------------------
+for (const [label, width] of [["wide", 1440], ["narrow", 390], ["tiny", 360]]) {
+  const { page, context } = await openPage(browser, { width, height: 900 });
+  await go(page, "/company/AAPL");
+  report.check(`axis_overlaps_${label}`, await page.evaluate(() => {
+    const boxes = Array.from(document.querySelectorAll(".x-axis span"))
+      .filter((node) => getComputedStyle(node).display !== "none")
+      .map((node) => node.getBoundingClientRect());
+    let overlaps = 0;
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) {
+        if (boxes[i].left < boxes[j].right && boxes[j].left < boxes[i].right) overlaps += 1;
+      }
+    }
+    return { visible: boxes.length, overlaps };
+  }));
+  report.check(`pill_text_inside_${label}`, await page.evaluate(() => {
+    const pill = document.querySelector("#price-status .pill");
+    const text = pill.querySelector(".pill-text").getBoundingClientRect();
+    const chev = pill.querySelector(".chev").getBoundingClientRect();
+    return text.right <= chev.left + 1 || text.bottom <= chev.top + 1;
+  }));
+  await context.close();
+}
+
 // ---- card detail: a fact marker leads to its evidence row ---------------------
 {
   const { page, context } = await openPage(browser);

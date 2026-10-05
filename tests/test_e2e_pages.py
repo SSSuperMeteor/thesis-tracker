@@ -166,3 +166,12 @@ def test_routing_handles_unknown_pages_history_and_overtaking_navigations(checks
 @pytest.mark.parametrize("page", ["overview", "company", "cards", "jobs"])
 def test_browser_zoom_never_scrolls_the_page_sideways(checks, scale, page):
     assert checks[f"overflow_zoom_{scale}_{page}"] == 0
+
+
+@pytest.mark.parametrize("label", ["wide", "narrow", "tiny"])
+def test_chart_axis_labels_do_not_overlap_and_the_price_pill_keeps_its_text_clear(
+        checks, label):
+    axis = checks[f"axis_overlaps_{label}"]
+    assert axis["visible"] >= 3
+    assert axis["overlaps"] == 0, axis
+    assert checks[f"pill_text_inside_{label}"] is True

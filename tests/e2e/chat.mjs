@@ -108,6 +108,23 @@ if (flow === "derived") {
     (node) => getComputedStyle(node.querySelector(".fact-name"), "::after").content === "none"
       || getComputedStyle(node.querySelector(".fact-name"), "::after").content === "normal")));
 }
+if (flow === "answer") {
+  // On a phone, with the tool list opened (its argument text holds long ids), the
+  // page must not scroll sideways.
+  for (const width of [360, 390]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.evaluate(() => document.querySelectorAll("details").forEach((d) => { d.open = true; }));
+    await page.waitForTimeout(300);
+    report.check(`chat_overflow_${width}`, await pageOverflow(page));
+    report.note(`overflowing at ${width}: ` + await page.evaluate(() => {
+      const wide = document.documentElement.clientWidth;
+      return Array.from(document.querySelectorAll("body *"))
+        .filter((node) => node.getBoundingClientRect().right > wide + 1)
+        .slice(0, 6).map((node) => `${node.tagName}.${node.className}`).join(" | ");
+    }));
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+}
 if (flow === "refused") {
   const text = await page.locator(".refusal").innerText();
   report.check("refusal_text", text);

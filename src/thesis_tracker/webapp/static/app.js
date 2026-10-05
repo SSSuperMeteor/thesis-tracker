@@ -1343,7 +1343,7 @@ async function viewChat(host, conversationId) {
   ]);
   const dock = el("div", { class: "composer-dock" }, [
     composer(startup, conversationId, page.turn),
-    el("p", { class: "usage-bar" }, [
+    el("div", { class: "usage-bar" }, [
       el("span", { text: page.usage.summary_line }),
       el("details", {}, [
         el("summary", { text: "明细" }),

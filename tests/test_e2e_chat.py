@@ -75,6 +75,8 @@ def test_a_person_can_start_a_conversation_ask_and_read_the_answer(app):
     assert checks["first_conversation_keeps_its_evidence"] is True
     assert checks["long_message_page_overflow"] == 0
     assert checks["long_message_block_overflow"] == 0
+    assert checks["chat_overflow_360"] == 0, result["notes"]
+    assert checks["chat_overflow_390"] == 0, result["notes"]
     assert result["problems"] == []
 
 

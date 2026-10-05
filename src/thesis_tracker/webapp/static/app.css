@@ -202,6 +202,7 @@ p { margin: 0 0 var(--space) 0; }
 /* the price state lives at the bottom of the sidebar, always in view */
 .price-status { margin-top: auto; position: relative; }
 .pill {
+  white-space: normal;
   width: 100%;
   display: flex;
   align-items: center;
@@ -256,8 +257,11 @@ p { margin: 0 0 var(--space) 0; }
 .pop button:hover { background: var(--side-bg); }
 
 main { min-width: 0; padding: 32px 40px 72px 40px; }
-.page { max-width: var(--col-wide); margin: 0 auto; display: grid; gap: 24px; align-content: start; }
-.stack { display: grid; gap: 24px; }
+/* Every grid that stacks content declares its one column as minmax(0, 1fr).  An
+   implicit column is as wide as its widest content, so a single long identifier
+   inside a tool list used to make the whole page wider than a phone. */
+.page { max-width: var(--col-wide); margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-content: start; }
+.stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
 h1:focus { outline: none; }
 
 .page-head {
@@ -317,6 +321,7 @@ button.primary {
 button.primary:hover { background: var(--accent); opacity: .92; }
 button.primary:disabled { background: var(--surface-2); border-color: var(--ctl-rule); color: var(--ink-2); opacity: 1; }
 button:disabled { color: var(--ink-2); cursor: not-allowed; }
+button { white-space: nowrap; }
 button.small { font-size: 13px; padding: 2px 8px; }
 button .icon { vertical-align: -3px; margin-right: 4px; }
 
@@ -416,7 +421,7 @@ table.list thead th {
 table.list tbody tr:hover > * { background: var(--accent-1); }
 table.list tbody tr:last-child > * { border-bottom: 0; }
 table.list td.num, table.list th.num { text-align: right; font-variant-numeric: tabular-nums; }
-table.list td.reason { white-space: normal; min-width: 16em; color: var(--ink-2); font-size: 13px; }
+table.list td.reason { white-space: normal; min-width: 8em; max-width: 32em; color: var(--ink-2); font-size: 13px; }
 table.list td.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
 table.list td.end, table.list th.end { text-align: right; width: 1%; padding-right: 8px; }
 table.list [translate="no"] { translate: no; }
@@ -657,7 +662,7 @@ table.coverage thead tr:first-child > th { height: 31px; }
 /* ---------------------------------------------------------------
    verdict strip and metric blocks (card detail, company page)
    --------------------------------------------------------------- */
-.verdict { display: grid; gap: 16px; }
+.verdict { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .verdict-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
 .verdict-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--ink-2); font-size: 13px; margin: 0; }
 .verdict-meta span { white-space: nowrap; }
@@ -733,7 +738,7 @@ table.coverage thead tr:first-child > th { height: 31px; }
 /* ---------------------------------------------------------------
    price chart: the backend sends paths and percentages, the page places them
    --------------------------------------------------------------- */
-.chart { display: grid; gap: 10px; }
+.chart { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .chart-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
 .range-tabs { display: inline-flex; border: 1px solid var(--ctl-rule); border-radius: var(--r-ctl); overflow: hidden; }
 .range-tabs button { border: 0; border-radius: 0; background: transparent; padding: 3px 14px; font-size: 13px; }
@@ -853,6 +858,8 @@ table.coverage thead tr:first-child > th { height: 31px; }
 @media (max-width: 520px) {
   .chart-body { grid-template-columns: 44px minmax(0, 1fr); column-gap: 6px; }
   .x-axis { margin-left: 50px; }
+  /* five date labels do not fit across a phone: keep the first, middle and last */
+  .x-axis span:nth-child(even) { display: none; }
   .plot .level-label { right: 4px; padding: 0 6px; }
 }
 .visually-hidden {
@@ -875,7 +882,7 @@ table.coverage thead tr:first-child > th { height: 31px; }
   justify-content: center;
   margin: 0 auto;
 }
-.reading { min-width: 0; display: grid; gap: 16px; align-content: start; }
+.reading { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; }
 .evidence {
   position: sticky;
   top: 16px;
@@ -945,6 +952,8 @@ tr.flash, .fact-row.flash { animation: fact-highlight 1.2s ease-out; }
 
 /* the one emphasis treatment: a fact marker in running text */
 .fact-ref {
+  white-space: normal;
+  text-align: left;
   font: inherit;
   color: var(--accent);
   background: none;
@@ -1078,7 +1087,7 @@ ol.steps .at { color: var(--ink-2); font-size: 12px; white-space: nowrap; }
 .chat-layout { min-height: calc(100vh - 190px); align-items: stretch; }
 .chat-layout .evidence { align-self: start; }
 .chat-layout .reading { align-content: stretch; grid-template-rows: 1fr auto; gap: 12px; }
-.thread { display: grid; gap: 10px; align-content: start; }
+.thread { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-content: start; }
 .message { padding: 4px 0; overflow-wrap: anywhere; }
 .message-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .message-head .who { font-weight: 600; }
@@ -1128,6 +1137,7 @@ ol.steps .at { color: var(--ink-2); font-size: 12px; white-space: nowrap; }
   position: sticky;
   bottom: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   padding: 10px 0 4px 0;
   background: var(--paper);
@@ -1153,16 +1163,20 @@ ol.steps .at { color: var(--ink-2); font-size: 12px; white-space: nowrap; }
 .chat-input:focus-visible { outline: none; }
 .composer:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .chat-input:disabled { color: var(--ink-2); }
-.composer-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.composer-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 6px; }
+.composer-row .composer-note { flex: 1 1 14em; }
 .composer-note { margin: 0; color: var(--ink-2); font-size: 12px; }
 .usage-bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; color: var(--ink-2); font-size: 12px; margin: 0; }
-.usage-bar details { display: inline; }
+.usage-bar details { display: inline; min-width: 0; max-width: 100%; }
+.usage-bar details[open] { display: block; flex: 1 1 100%; }
 .usage-bar summary { display: inline; cursor: pointer; color: var(--accent); }
 .usage-table { margin-top: 8px; }
 .usage-table .cost { color: var(--ink-2); font-size: 13px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip {
+  white-space: normal;
+  text-align: left;
   font: inherit;
   color: var(--ink);
   background: var(--surface);
