@@ -485,3 +485,51 @@ def test_a_made_up_target_cannot_be_published_as_a_derived_fact(conversation, fi
     assert seen["invented"] not in store.facts(conv["conversation_id"])
     # And the refusal is what the reader sees: no answer, no invented number.
     assert result["text"] is None
+
+
+# -- findings from the first real-model run -------------------------------------
+
+def test_the_system_prompt_shows_placeholders_with_single_braces():
+    """Real run: nine of ten first drafts were refused for "a brace inside a brace".
+
+    The prompt was written for ``str.format`` (doubled braces) but filled with
+    ``replace``, so the model read ``{{fact:<id>}}`` literally and copied it.
+    """
+    from thesis_tracker.webapp.chat.context import system_prompt
+
+    text = system_prompt("NVDA")
+    assert "{{" not in text and "}}" not in text
+    assert "{fact:<完整编号>}" in text
+    assert "{card:<卡编号>:<字段>}" in text
+    assert '{"answer": "正文"}' in text
+    assert "NVDA" in text and "{ticker}" not in text and "{prompt_version}" not in text
+
+
+def test_the_prompt_version_moved_with_the_prompt():
+    from thesis_tracker.webapp.chat import PROMPT_VERSION
+
+    assert PROMPT_VERSION == "chat-v2-2026-10-05"
+
+
+@pytest.mark.parametrize("content", ['{"answer": ""}', '{"answer": "   "}', "", "   ", None])
+def test_an_empty_answer_is_never_published(conversation, fixture, content):
+    """Real run: two turns published a blank message because "" has no violations."""
+    store, conv = conversation
+    client = ScriptedChatClient([{"content": content},
+                                 {"content": '{"answer": "我看了本地数据。"}'}])
+    result = round_for(fixture, store, conv, client).run()
+    assert result["status"] == "passed"
+    assert result["text"] == "我看了本地数据。"
+    assert result["message"]["attempts"] == 2
+    # The model was told why the first draft was refused.
+    retry = client.requests[1]["messages"][-1]["content"]
+    assert "L06" in retry and "空" in retry
+
+
+def test_three_empty_drafts_end_in_a_refusal_not_a_blank_message(conversation, fixture):
+    store, conv = conversation
+    client = ScriptedChatClient([{"content": '{"answer": ""}'}] * 3)
+    result = round_for(fixture, store, conv, client).run()
+    assert result["status"] == "rejected"
+    assert result["text"] is None
+    assert {item["rule"] for item in result["violations"]} == {"L06"}

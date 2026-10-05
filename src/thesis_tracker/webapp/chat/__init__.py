@@ -11,4 +11,7 @@ from __future__ import annotations
 # Bumped whenever the system prompt or the validation rules change, so an
 # archived answer can be traced to the rules that accepted it.  This module must
 # stay import-free: the submodules import it, so anything here would be circular.
-PROMPT_VERSION = "chat-v1-2026-10-05"
+# v2: the prompt's placeholders were written with doubled braces for str.format
+# but filled with replace(), so the model copied "{{fact:...}}"; also the scale,
+# card-rationale and new-card-price rules, after the first real-model run.
+PROMPT_VERSION = "chat-v2-2026-10-05"

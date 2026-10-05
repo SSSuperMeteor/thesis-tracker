@@ -178,6 +178,12 @@ class ChatRound:
 
             body = self._answer_body(assistant.get("content"))
             violations = self._validate(body)
+            if not body.strip():
+                # An empty body has no number, no action word and no placeholder,
+                # so no C rule can object to it.  It is still not an answer, and
+                # the first real-model run published two of them.
+                violations.append(_error(
+                    "L06", "answer", "回答是空的；请只输出 JSON，answer 字段写正文。"))
             if not violations:
                 text, segments = render_answer(body, evidence=self._evidence())
                 # The accepted draft is an attempt too: the count records how

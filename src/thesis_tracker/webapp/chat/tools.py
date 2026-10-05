@@ -22,7 +22,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from thesis_tracker.decision.core import fact_index, read_card
+from thesis_tracker.decision.core import fact_index, free_numbers, read_card
 from thesis_tracker.decision.evidence import (
     HORIZON_LABELS,
     RESOLUTIONS,
@@ -457,7 +457,10 @@ class ToolBox:
                                              created_at=archived.get("created_at")),
                   "disclaimer": card.get("disclaimer"),
                   "note": ("action、tendency、horizon 与价位都是这张卡的 AI 判断，"
-                           "不是公司事实；引用时用对应的占位符。")},
+                           "不是公司事实；引用时用对应的占位符。这个工具不返回这张卡的"
+                           "理由、止损依据、目标依据和失效条件文字，它们在卡详情页里；"
+                           "被问到“为什么”时说明这一点并请用户看详情页，"
+                           "不要说卡里没有记录。")},
             source={"provider": "decision_archive", "card_id": card_id},
             fact_id=f"card|{card_id}")
 
@@ -472,6 +475,14 @@ class ToolBox:
         known = self.facts()
         if op == "product":
             return self._product(known, a, scale)
+        if scale is not None:
+            # Silently dropping it handed a user who asked for a percentage a bare
+            # ratio; say what to do instead.
+            return _error("scale_not_used",
+                          f"scale 只用于 product，{op} 不用它，所以这次没有执行。"
+                          "要百分比：用 pct_change（(a-b)/b，已经是百分数），"
+                          "或对一个比值用 product 并令 scale=100。",
+                          as_of=self.as_of, tool="compare_facts")
         left, right = known.get(a), known.get(b)
         if left is None or right is None:
             missing = a if left is None else b
@@ -622,6 +633,14 @@ class ToolBox:
         if not reason or not str(reason).strip():
             return _error("reason_required",
                           "request_new_card 需要一句 reason，说明为什么需要新的判断。",
+                          as_of=self.as_of, tool="request_new_card")
+        if free_numbers(str(reason)):
+            # The reason is shown to the reader and the analysis it starts takes no
+            # price from anyone: a number here would read as a promise the new card
+            # cannot keep (the first real run proposed a card "around 300").
+            return _error("reason_has_numbers",
+                          "reason 里不能写价位或数字：新卡的买点、止损和目标由分析流程"
+                          "自己给出，不接受用户指定的价位。请只说明为什么需要新的判断。",
                           as_of=self.as_of, tool="request_new_card")
         proposal = self.store.create_proposal(
             self.conversation_id, self._latest_message_id(), horizon=horizon,

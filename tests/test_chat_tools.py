@@ -590,3 +590,65 @@ def test_the_schema_tells_the_model_what_it_may_pass(toolbox):
     description = schema["function"]["parameters"]["properties"]["scale"]["description"]
     assert "0.5" in description and "100" in description
     assert "user" in description.lower()
+
+
+# -- findings from the first real-model run -------------------------------------
+
+def test_a_scale_on_any_other_operation_is_an_error_not_silently_ignored(
+        toolbox, fixture):
+    """Real run: ``op=ratio, scale=100`` returned a bare ratio (0.0677) to a user who
+    had asked for a percentage, because the scale was dropped without a word."""
+    card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+    for op in ("ratio", "difference", "addition", "pct_change"):
+        refused = call(toolbox, "compare_facts", a=prices["entry_high"]["fact_id"],
+                       b=prices["entry_low"]["fact_id"], op=op, scale=100)
+        assert refused["status"] == "error", op
+        assert refused["reason"]["code"] == "scale_not_used"
+        assert "product" in refused["reason"]["message"]
+        assert "pct_change" in refused["reason"]["message"]
+
+
+def test_an_operation_without_a_scale_is_unchanged(toolbox, fixture):
+    card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+    ok = call(toolbox, "compare_facts", a=prices["entry_high"]["fact_id"],
+              b=prices["entry_low"]["fact_id"], op="ratio")
+    assert ok["status"] == "ok"
+
+
+def test_a_card_read_says_what_it_does_not_contain(toolbox, fixture):
+    """Real run: asked why a stop sat where it did, the model said the card kept no
+    reason.  It does; this tool just does not return it, and must say so."""
+    note = call(toolbox, "get_card", card_id=fixture.card_id)["data"]["note"]
+    for missing in ("理由", "止损依据", "目标依据", "失效条件"):
+        assert missing in note
+    assert "详情页" in note
+    assert "不要说" in note
+
+
+def test_a_proposal_reason_cannot_carry_a_price_or_any_number(toolbox):
+    """Real run: a proposal said a new card would use the user's 300, which the
+    analysis never accepts.  The reason is shown to the reader, so it follows the
+    same rule as an answer: no free numbers, and no prices from the user."""
+    for reason in ("用户要把目标价改成 300，需要新卡", "想看 252 附近的判断", "看 1.3 倍"):
+        refused = call(toolbox, "request_new_card", horizon="mid", reason=reason)
+        assert refused["status"] == "error", reason
+        assert refused["reason"]["code"] == "reason_has_numbers"
+        assert "价位" in refused["reason"]["message"]
+    assert toolbox.store.pending_proposals(toolbox.conversation_id) == []
+    ok = call(toolbox, "request_new_card", horizon="mid", reason="需要一个新的中期判断")
+    assert ok["status"] == "ok"
+    # Dates and periods are not prices.
+    dated = call(toolbox, "request_new_card", horizon="short",
+                 reason="2026-10-02 之后又有了新数据，Q3 财报也已披露")
+    assert dated["status"] == "ok"
+
+
+def test_the_prompt_tells_the_model_the_new_card_takes_no_price_from_the_user():
+    from thesis_tracker.webapp.chat.context import system_prompt
+
+    text = system_prompt("AAPL")
+    assert "不接受用户指定" in text
+    assert "pct_change" in text            # how to get a percentage
+    assert "详情页" in text                 # where a card's reasons live
