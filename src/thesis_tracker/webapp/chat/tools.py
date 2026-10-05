@@ -1,6 +1,6 @@
 """The read-only tools a chat round may call, and their dispatch.
 
-Three design rules hold this module together:
+Three rules hold this module together:
 
 * the model cannot choose a date — ``as_of`` is injected by the program and any
   value the model sends is dropped, not negotiated;
@@ -9,9 +9,9 @@ Three design rules hold this module together:
 * the only way to reach a new opinion is ``request_new_card``, which writes a
   pending proposal and never runs anything.
 
-Card prices are exposed as *pseudo-facts* with ids of the form
+Card judgment fields are exposed as *pseudo-facts* with ids of the form
 ``card|<card_id>|<field>`` so that "how far is the close from the stop" becomes
-a deterministic subtraction rather than mental arithmetic by the model.
+a deterministic subtraction instead of mental arithmetic by the model.
 """
 
 from __future__ import annotations
@@ -22,81 +22,126 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from thesis_tracker.decision.core import fact_index, read_card
-
-# The compact view a tool result is trimmed to before it reaches the model.
 from thesis_tracker.decision.evidence import (
     HORIZON_LABELS,
     RESOLUTIONS,
     TOOL_HISTORY_FIELDS,
+    bucket_dates,
     display_text,
     fact_category,
-    history_view,
 )
 from thesis_tracker.financial.tool import get_fundamental_metrics
 from thesis_tracker.indicator_tool import get_indicators
 from thesis_tracker.prices import MAX_ROWS, get_price_history
 
-# Fields the model may ask for on a tiered history request.
-TIERED_TOOLS = ("get_price_history", "get_indicators")
-# Card price fields exposed as pseudo-facts, in a stable order.
+# Fields a card exposes as citable pseudo-facts, in a stable order.
 CARD_PRICE_FIELDS = ("action", "tendency", "horizon", "entry_low", "entry_high",
                      "stop_loss", "target_price", "created_at")
-# compare_facts operations, and the formula each one records.
+# compare_facts operations and the formula each one records in the derived fact.
 COMPARE_OPS = {
-    "difference": ("a - b", "a - b"),
-    "ratio": ("a / b", "a / b"),
-    "pct_change": ("(a - b) / b", "(a - b) / b"),
+    "difference": "a - b",
+    "ratio": "a / b",
+    "pct_change": "(a - b) / b",
 }
 DERIVED_PREFIX = "derived|chat|"
+CARD_ANNOTATION = "AI 判断"
 
-SYSTEM_FACT_NAMES = {"action": "action", "tendency": "tendency", "horizon": "horizon",
-                     "entry_low": "entry_low", "entry_high": "entry_high",
-                     "stop_loss": "stop_loss", "target_price": "target_price",
-                     "created_at": "created_at"}
 SYSTEM_FACT_LABELS = {"action": "动作", "tendency": "倾向", "horizon": "周期",
                       "entry_low": "买点下沿", "entry_high": "买点上沿",
                       "stop_loss": "止损", "target_price": "目标",
                       "created_at": "创建时间"}
-CARD_ANNOTATION = "AI 判断"
+COMPARE_LABELS = {"difference": "差值", "ratio": "比值", "pct_change": "百分比变化"}
 
-
-def _reason(code: str, message: str) -> dict:
-    return {"code": code, "message": message}
+TOOL_NAMES = ("get_price_history", "get_indicators", "get_fundamental_metrics",
+              "list_cards", "get_card", "compare_facts", "request_new_card")
 
 
 def _error(code: str, message: str, *, as_of: str, tool: str) -> dict:
     return {"status": "error", "data": None, "source": {"tool": tool},
-            "as_of": as_of, "fact_id": None, "reason": _reason(code, message)}
+            "as_of": as_of, "fact_id": None,
+            "reason": {"code": code, "message": message}}
 
 
-def _envelope(*, as_of: str, data: Any, source: Any = None, status: str = "ok",
+def _envelope(*, as_of: str, data: Any, source: Any = None,
               fact_id: str | None = None) -> dict:
-    return {"status": status, "data": data, "source": source, "as_of": as_of,
+    return {"status": "ok", "data": data, "source": source, "as_of": as_of,
             "fact_id": fact_id, "reason": None}
+
+
+def card_price_facts(card: dict, card_id: str, *,
+                     created_at: str | None) -> list[dict]:
+    """Card judgment fields as citable pseudo-facts.
+
+    ``card_id`` and ``created_at`` are passed in rather than read from the card:
+    the archive keeps them in its own columns, not inside the card JSON.  This is
+    a module function so the conversation context can show a pinned card's fields
+    without constructing a toolbox.
+    """
+    facts: list[dict] = []
+    for field in CARD_PRICE_FIELDS:
+        unit = "text"
+        if field in {"action", "tendency", "horizon"}:
+            value = {"action": card.get("action"), "tendency": card.get("bias"),
+                     "horizon": card.get("horizon")}[field]
+            display = value
+        elif field == "created_at":
+            from thesis_tracker.webapp import display as display_module
+
+            value = created_at
+            display = display_module.format_timestamp(value)
+        elif field in {"entry_low", "entry_high"}:
+            bounds = card.get("entry_range")
+            if not (isinstance(bounds, list) and len(bounds) == 2):
+                continue
+            value = bounds[0] if field == "entry_low" else bounds[1]
+            display = display_text(value, "USD/share", name="close")
+            unit = "USD/share"
+        else:
+            value = card.get(field)
+            display = display_text(value, "USD/share", name="close")
+            unit = "USD/share"
+        if value is None or display is None:
+            continue
+        facts.append({
+            "fact_id": f"card|{card_id}|{field}",
+            "name": field,
+            "label": SYSTEM_FACT_LABELS[field],
+            "value": str(value),
+            "unit": unit,
+            "display": str(display),
+            "date_or_period": card.get("as_of"),
+            "ticker": card.get("ticker"),
+            "category": "card",
+            "card_id": card_id,
+            "field": field,
+            "annotation": CARD_ANNOTATION,
+            "source": {"provider": "decision_archive", "card_id": card_id,
+                       "field": field},
+        })
+    return facts
 
 
 class ToolBox:
     """One conversation's view of the local data, plus its evidence set."""
 
     def __init__(self, *, store, conversation: dict, as_of: str, fact_db, price_db,
-                 card_db) -> None:
+                 card_db, message_id: str | None = None) -> None:
         self.store = store
         self.conversation = conversation
         self.ticker = conversation["ticker"].upper()
         self.conversation_id = conversation["conversation_id"]
+        # The audit rows belong to the user message this turn is answering.
+        self.message_id = message_id
         self.as_of = as_of
         self.fact_db = fact_db
         self.price_db = price_db
         self.card_db = card_db
-        # Facts this round contributed, newest write wins for the same id.
-        self._turn_facts: dict[str, dict] = {}
         self.records: list[dict] = []
-        self._last_tool = ""
 
     # -- schemas -------------------------------------------------------------
 
     def accepted_arguments(self, name: str) -> set[str]:
-        """Arguments the dispatch layer for ``name`` will actually read."""
+        """Arguments the dispatch layer for ``name`` actually reads."""
         return {
             "get_price_history": {"ticker", "resolution", "fields"},
             "get_indicators": {"ticker", "resolution", "fields"},
@@ -104,102 +149,97 @@ class ToolBox:
             "list_cards": set(),
             "get_card": {"card_id"},
             "compare_facts": {"a", "b", "op"},
-            # ``reason`` is advertised but not required; the tool refuses to
-            # write a proposal without one rather than inventing a rationale.
             "request_new_card": {"horizon", "reason"},
         }.get(name, set())
 
     def schemas(self) -> list[dict]:
         """Tool schemas; every advertised argument is one dispatch accepts."""
-        ticker_note = (f"The conversation is about {self.ticker}.  Only {self.ticker} "
+        ticker_note = (f"The conversation is about {self.ticker}. Only {self.ticker} "
                        "and SPY are allowed; SPY is a benchmark for comparison.")
-        price_history = {
-            "type": "function",
-            "function": {
-                "name": "get_price_history",
-                "description": ("Read this company's local stored daily prices from the "
-                                "newest available day.  Omit resolution for the latest "
-                                "price page, or give a resolution and fields for a tiered "
-                                "history window."),
-                "parameters": {"type": "object", "additionalProperties": False,
-                               "properties": {
-                                   "ticker": {"type": "string", "description": ticker_note},
-                                   "resolution": {"type": "string", "enum": list(RESOLUTIONS),
-                                                  "description": "Tiered window; required together with fields."},
-                                   "fields": {"type": "array", "items": {"type": "string",
-                                                                         "enum": list(TOOL_HISTORY_FIELDS["get_price_history"])},
-                                              "description": "Fields to return with a resolution."}},
-                               "required": []}}}
-        indicators = json.loads(json.dumps(price_history))
-        indicators["function"]["name"] = "get_indicators"
-        indicators["function"]["description"] = (
-            "Read this company's local adjusted-price indicators (RSI, MACD histogram, "
-            "volume ratio, moving averages) computed from stored prices.")
-        indicators["function"]["parameters"]["properties"]["fields"] = {
-            "type": "array",
-            "items": {"type": "string", "enum": list(TOOL_HISTORY_FIELDS["get_indicators"])},
-            "description": "Fields to return with a resolution."}
-        fundamentals = {
-            "type": "function",
-            "function": {
+
+        def history_tool(name: str, description: str) -> dict:
+            return {"type": "function", "function": {
+                "name": name, "description": description,
+                "parameters": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "ticker": {"type": "string", "description": ticker_note},
+                        "resolution": {"type": "string", "enum": list(RESOLUTIONS),
+                                       "description": ("Tiered window; give it together "
+                                                       "with fields.")},
+                        "fields": {"type": "array",
+                                   "items": {"type": "string",
+                                             "enum": list(TOOL_HISTORY_FIELDS[name])},
+                                   "description": ("Fields to return with a resolution. "
+                                                   "Supported: "
+                                                   + ", ".join(TOOL_HISTORY_FIELDS[name])
+                                                   + ".")}},
+                    "required": []}}}
+
+        return [
+            history_tool("get_price_history",
+                         "Read this company's local stored daily prices from the newest "
+                         "available day. Omit resolution for the latest price page, or "
+                         "give a resolution and fields for a tiered history window."),
+            history_tool("get_indicators",
+                         "Read this company's local adjusted-price indicators (moving "
+                         "averages, RSI, MACD histogram, volume ratio) computed from "
+                         "stored prices."),
+            {"type": "function", "function": {
                 "name": "get_fundamental_metrics",
                 "description": ("Read this company's eight point-in-time SEC financial "
-                                "metrics, with an explicit reason for any that cannot be "
-                                "computed."),
+                                "metrics, with an explicit reason for any that cannot "
+                                "be computed."),
                 "parameters": {"type": "object", "additionalProperties": False,
                                "properties": {"ticker": {"type": "string",
                                                          "description": ticker_note}},
-                               "required": []}}}
-        list_cards = {
-            "type": "function",
-            "function": {
+                               "required": []}}},
+            {"type": "function", "function": {
                 "name": "list_cards",
                 "description": (f"List the archived advice cards for {self.ticker}, newest "
-                                "first.  These are previously generated AI judgments, not "
-                                "facts about the company."),
+                                "first. These are previously generated AI judgments, "
+                                "not facts about the company."),
                 "parameters": {"type": "object", "additionalProperties": False,
-                               "properties": {}, "required": []}}}
-        get_card = {
-            "type": "function",
-            "function": {
+                               "properties": {}, "required": []}}},
+            {"type": "function", "function": {
                 "name": "get_card",
-                "description": ("Read one archived advice card: its AI judgment fields, its "
-                                "evidence facts with their ids, and its price levels as "
-                                "citable placeholder targets."),
+                "description": ("Read one archived advice card: its AI judgment fields, "
+                                "its evidence facts with their ids, and its price levels "
+                                "as citable placeholder targets."),
                 "parameters": {"type": "object", "additionalProperties": False,
-                               "properties": {"card_id": {"type": "string",
-                                                          "description": "A card id from list_cards."}},
-                               "required": ["card_id"]}}}
-        compare = {
-            "type": "function",
-            "function": {
+                               "properties": {"card_id": {
+                                   "type": "string",
+                                   "description": "A card id from list_cards."}},
+                               "required": ["card_id"]}}},
+            {"type": "function", "function": {
                 "name": "compare_facts",
                 "description": ("Do arithmetic on two facts and return a new fact you may "
-                                "cite.  Use this instead of calculating yourself.  Both "
+                                "cite. Use this instead of calculating yourself. Both "
                                 "operands must have the same unit."),
                 "parameters": {"type": "object", "additionalProperties": False,
                                "properties": {
                                    "a": {"type": "string", "description": "Left fact id."},
                                    "b": {"type": "string", "description": "Right fact id."},
                                    "op": {"type": "string", "enum": list(COMPARE_OPS),
-                                          "description": "difference: a - b. ratio: a / b. pct_change: (a - b) / b."}},
-                               "required": ["a", "b", "op"]}}}
-        request = {
-            "type": "function",
-            "function": {
+                                          "description": ("difference: a - b. ratio: a / b. "
+                                                          "pct_change: (a - b) / b.")}},
+                               "required": ["a", "b", "op"]}}},
+            {"type": "function", "function": {
                 "name": "request_new_card",
-                "description": ("Propose generating a new advice card and return its id.  This "
-                                "does not run anything: the user must confirm it.  Never say "
-                                "a card has been generated."),
+                "description": ("Propose generating a new advice card and return its id. "
+                                "This runs nothing: the user must confirm it. Never say a "
+                                "card has been generated."),
                 "parameters": {"type": "object", "additionalProperties": False,
                                "properties": {
-                                   "horizon": {"type": "string", "enum": list(HORIZON_LABELS),
-                                               "description": "Requested analysis horizon."},
-                                   "reason": {"type": "string",
-                                              "description": "One sentence: what new judgment is needed and why."}},
-                               "required": ["horizon", "reason"]}}}
-        return [price_history, indicators, fundamentals, list_cards, get_card, compare,
-                request]
+                                   "horizon": {
+                                       "type": "string", "enum": list(HORIZON_LABELS),
+                                       "description": "Requested analysis horizon."},
+                                   "reason": {
+                                       "type": "string",
+                                       "description": ("One sentence: what new judgment "
+                                                       "is needed and why.")}},
+                               "required": ["horizon", "reason"]}}},
+        ]
 
     # -- dispatch ------------------------------------------------------------
 
@@ -210,27 +250,28 @@ class ToolBox:
         handler = getattr(self, f"_tool_{name}", None)
         if handler is None:
             return None, _error("unknown_tool",
-                                f"没有名为 {name} 的工具。可用工具：get_price_history、"
-                                "get_indicators、get_fundamental_metrics、list_cards、"
-                                "get_card、compare_facts、request_new_card。",
+                                f"没有名为 {name} 的工具。可用工具："
+                                + "、".join(TOOL_NAMES) + "。",
                                 as_of=self.as_of, tool=name)
-        self._last_tool = name
         envelope = handler(**arguments)
         facts = self._facts_from(envelope, name)
         if facts:
             self.store.add_facts(self.conversation_id, facts)
+        payload = json.dumps(envelope, ensure_ascii=False)
+        if self.message_id:
+            self.store.append_tool_call(self.message_id, tool=name, args=dict(arguments),
+                                        envelope=envelope)
         self.records.append({
-            "tool": name, "args": {key: value for key, value in arguments.items()},
-            "bytes": len(json.dumps(envelope, ensure_ascii=False).encode("utf-8")),
-            "envelope": envelope, "fact_count": len(facts),
-        })
+            "tool": name, "args": dict(arguments),
+            "bytes": len(payload.encode("utf-8")),
+            "envelope": envelope, "fact_count": len(facts)})
         if envelope.get("status") == "error":
             return None, envelope
         return envelope, None
 
     def facts(self) -> dict[str, dict]:
         """Everything this conversation may cite."""
-        return {**self.store.facts(self.conversation_id), **self._turn_facts}
+        return self.store.facts(self.conversation_id)
 
     # -- company resolution --------------------------------------------------
 
@@ -241,7 +282,7 @@ class ToolBox:
                 "ticker_not_in_conversation",
                 f"这个对话只讨论 {self.ticker}（以及作为基准的 SPY），不能查询 {symbol}。"
                 f"请改用 {self.ticker} 或 SPY。",
-                as_of=self.as_of, tool="get_price_history")
+                as_of=self.as_of, tool="")
         return symbol, None
 
     # -- the three analysis tools -------------------------------------------
@@ -286,32 +327,32 @@ class ToolBox:
                             limit=MAX_ROWS, db_path=self.price_db)
         if envelope.get("status") != "ok":
             return envelope
-        return history_view({"calls": [], "derived_facts": []}, name, resolution, fields,
-                            db_path=self.price_db) if False else self._tiered(
-            name, symbol, envelope, resolution, fields)
+        return self._tiered(envelope, resolution, fields)
 
-    def _tiered(self, name, symbol, envelope, resolution, fields) -> dict:
-        """Trim a full history page to the requested tier's rows."""
-        from thesis_tracker.decision.evidence import bucket_dates
-
-        rows = (envelope.get("data") or {}).get("rows") or []
-        dates = [row.get("date") for row in rows if row.get("date")]
-        if not dates:
+    def _tiered(self, envelope: dict, resolution: str, fields: list[str]) -> dict:
+        """Trim a full history page down to the requested tier's rows."""
+        data = envelope.get("data") or {}
+        rows = [row for row in (data.get("rows") or []) if row.get("date")]
+        if not rows:
             return envelope
-        chosen = bucket_dates(dates, resolution, dates[-1])
-        by_day = {row["date"]: row for row in rows if row.get("date")}
+        dates = [row["date"] for row in rows]
+        wanted = set(bucket_dates(dates, resolution, dates[-1]))
         trimmed = []
-        for day in chosen:
-            row = by_day.get(day)
-            if row is None:
+        for row in rows:
+            if row["date"] not in wanted:
                 continue
-            values = {key: row["values"][key] for key in fields
-                      if key in (row.get("values") or {})}
-            trimmed.append({"date": day, "values": values})
+            if "values" in row:
+                values = {key: value for key, value in (row.get("values") or {}).items()
+                          if key in fields}
+                trimmed.append({"date": row["date"], "values": values})
+            else:
+                kept = {key: row[key] for key in ("close", "adjusted_close")
+                        if key in fields and key in row}
+                trimmed.append({"date": row["date"], "fact_id": row.get("fact_id"),
+                                **kept})
         return {**envelope,
-                "data": {**(envelope.get("data") or {}), "resolution": resolution,
-                         "fields": list(fields), "rows": trimmed,
-                         "returned_rows": len(trimmed)}}
+                "data": {**data, "resolution": resolution, "fields": list(fields),
+                         "rows": trimmed, "returned_rows": len(trimmed)}}
 
     def _tool_get_fundamental_metrics(self, ticker: str | None = None) -> dict:
         symbol, refusal = self._company(ticker)
@@ -344,8 +385,7 @@ class ToolBox:
             return _error("card_required",
                           "get_card 需要一个 card_id；先调用 list_cards 取编号。",
                           as_of=self.as_of, tool="get_card")
-        known = {item["card_id"] for item in self.cards()}
-        if card_id not in known:
+        if card_id not in {item["card_id"] for item in self.cards()}:
             return _error("card_not_found",
                           f"这个对话里没有编号为 {card_id} 的建议卡。"
                           "请先调用 list_cards 取本公司的卡编号。",
@@ -360,85 +400,27 @@ class ToolBox:
                 continue
             facts.append({"fact_id": entry["fact_id"], "name": entry["name"],
                           "label": entry["name"], "value": entry["value"],
-                          "unit": entry["unit"], "date_or_period": entry["date_or_period"],
+                          "unit": entry["unit"],
+                          "date_or_period": entry["date_or_period"],
                           "display": display_text(entry["value"], entry["unit"],
                                                   name=entry["name"]),
                           "category": fact_category(entry)})
-        # The archive row carries the id and the creation time; the card JSON
-        # carries the judgment.  Both are needed to cite the card's own fields.
-        prices = self._price_facts(card, card_id, created_at=archived.get("created_at"))
         return _envelope(
             as_of=self.as_of,
             data={"card_id": card_id, "ticker": card["ticker"], "as_of": card["as_of"],
-                  "created_at": archived.get("created_at"), "action": card.get("action"),
-                  "tendency": card.get("bias"), "horizon": card.get("horizon"),
+                  "created_at": archived.get("created_at"),
+                  "action": card.get("action"), "tendency": card.get("bias"),
+                  "horizon": card.get("horizon"),
                   "confidence": card.get("confidence"),
                   "confidence_calibration": card.get("confidence_calibration"),
-                  "facts": facts, "prices": prices,
+                  "facts": facts,
+                  "prices": card_price_facts(card, card_id,
+                                             created_at=archived.get("created_at")),
                   "disclaimer": card.get("disclaimer"),
                   "note": ("action、tendency、horizon 与价位都是这张卡的 AI 判断，"
                            "不是公司事实；引用时用对应的占位符。")},
             source={"provider": "decision_archive", "card_id": card_id},
             fact_id=f"card|{card_id}")
-
-    def _price_facts(self, card: dict, card_id: str, *,
-                     created_at: str | None) -> list[dict]:
-        """Card judgment fields as citable pseudo-facts.
-
-        ``card_id`` is passed in rather than read from the card: the archive
-        stores it in its own column, not inside the card JSON.
-        """
-        import re
-
-        facts = []
-        for field in CARD_PRICE_FIELDS:
-            if field in {"action", "tendency", "horizon"}:
-                value = {"action": card.get("action"), "tendency": card.get("bias"),
-                         "horizon": card.get("horizon")}[field]
-                display = value
-                unit = "text"
-            elif field == "created_at":
-                from thesis_tracker.webapp import display as display_module
-
-                value = created_at
-                display = display_module.format_timestamp(value)
-                unit = "text"
-            elif field in {"entry_low", "entry_high"}:
-                bounds = card.get("entry_range")
-                if not (isinstance(bounds, list) and len(bounds) == 2):
-                    continue
-                value = bounds[0] if field == "entry_low" else bounds[1]
-                display = display_text(value, "USD/share", name="close")
-                unit = "USD/share"
-            else:
-                value = card.get(field)
-                display = display_text(value, "USD/share", name="close")
-                unit = "USD/share"
-            if value is None or display is None:
-                continue
-            if unit == "text" and not isinstance(display, str):
-                display = str(display)
-            if unit == "text" and re.search(r"\d", str(display)):
-                # A timestamp is citable text, but its digits must not leak as a
-                # bare number; the placeholder renders it, the model never types it.
-                pass
-            facts.append({
-                "fact_id": f"card|{card_id}|{field}",
-                "name": SYSTEM_FACT_NAMES[field],
-                "label": SYSTEM_FACT_LABELS[field],
-                "value": str(value),
-                "unit": unit,
-                "display": display,
-                "date_or_period": card.get("as_of"),
-                "ticker": card.get("ticker"),
-                "category": "card",
-                "card_id": card_id,
-                "field": field,
-                "annotation": CARD_ANNOTATION,
-                "source": {"provider": "decision_archive", "card_id": card_id,
-                           "field": field},
-            })
-        return facts
 
     # -- arithmetic ----------------------------------------------------------
 
@@ -463,10 +445,8 @@ class ToolBox:
                           as_of=self.as_of, tool="compare_facts")
         first, second = _decimal(left["value"]), _decimal(right["value"])
         if first is None or second is None:
-            return _error("not_computable",
-                          "这两个事实里有一个不是可运算的数值。",
+            return _error("not_computable", "这两个事实里有一个不是可运算的数值。",
                           as_of=self.as_of, tool="compare_facts")
-        formula, _ = COMPARE_OPS[op]
         if op == "difference":
             result = first - second
         elif op == "ratio":
@@ -482,26 +462,20 @@ class ToolBox:
                               as_of=self.as_of, tool="compare_facts")
             result = (first - second) / second
         unit = _result_unit(op, left["unit"])
-        name = f"compare_{op}"
         fact_id = derived_fact_id(a, b, op)
-        display = display_text(str(result), unit, name=name)
+        display = display_text(str(result), unit, name=f"compare_{op}")
         if display is None:
-            return _error("not_computable",
-                          "运算结果无法按现有显示规则呈现。",
+            return _error("not_computable", "运算结果无法按现有显示规则呈现。",
                           as_of=self.as_of, tool="compare_facts")
-        fact = {
-            "fact_id": fact_id, "name": name,
-            "label": {"difference": "差值", "ratio": "比值",
-                      "pct_change": "百分比变化"}[op],
-            "value": _canonical_number(result), "unit": unit, "display": display,
-            "date_or_period": left.get("date_or_period"), "ticker": self.ticker,
-            "category": "derived", "origin": "derived",
-            "source": {"provider": "derived", "formula": formula,
-                       "source_fact_ids": [a, b]},
-        }
-        self.store.add_facts(self.conversation_id, [fact])
+        fact = {"fact_id": fact_id, "name": f"compare_{op}",
+                "label": COMPARE_LABELS[op], "value": _canonical_number(result),
+                "unit": unit, "display": display,
+                "date_or_period": left.get("date_or_period"), "ticker": self.ticker,
+                "category": "derived", "origin": "derived",
+                "source": {"provider": "derived", "formula": COMPARE_OPS[op],
+                           "source_fact_ids": [a, b]}}
         return _envelope(as_of=self.as_of,
-                         data={"fact": fact, "formula": formula,
+                         data={"fact": fact, "formula": COMPARE_OPS[op],
                                "operands": {"a": a, "b": b, "op": op}},
                          source=fact["source"], fact_id=fact_id)
 
@@ -523,8 +497,8 @@ class ToolBox:
         return _envelope(
             as_of=self.as_of,
             data={"proposal_id": proposal["proposal_id"], "horizon": horizon,
-                  "horizon_label": HORIZON_LABELS[horizon], "reason": proposal["reason"],
-                  "status": proposal["status"],
+                  "horizon_label": HORIZON_LABELS[horizon],
+                  "reason": proposal["reason"], "status": proposal["status"],
                   "message": ("提议已记录，等用户在界面上确认后才会生成。"
                               "不要在回答里说卡已经生成。")},
             source={"provider": "chat"}, fact_id=f"proposal|{proposal['proposal_id']}")
@@ -539,21 +513,21 @@ class ToolBox:
         """Compile an envelope's observable values into citable facts."""
         if envelope.get("status") != "ok":
             return []
-        if isinstance(envelope.get("data"), dict) and "prices" in envelope["data"]:
+        data = envelope.get("data")
+        if isinstance(data, dict) and "prices" in data:
             # Reading a card makes two things citable: its judgment fields as
             # pseudo-facts, and its own archived evidence facts.
-            card_facts = []
-            for fact in envelope["data"].get("facts") or []:
-                card_facts.append({**fact, "ticker": envelope["data"].get("ticker"),
-                                   "category": fact.get("category") or "market",
-                                   "source": {"provider": "decision_archive",
-                                              "card_id": envelope["data"]["card_id"]}})
-            return [*envelope["data"]["prices"], *card_facts]
-        if envelope.get("fact_id", "").startswith("card|"):
+            card_facts = [{**fact, "ticker": data.get("ticker"),
+                           "category": fact.get("category") or "market",
+                           "source": {"provider": "decision_archive",
+                                      "card_id": data["card_id"]}}
+                          for fact in data.get("facts") or []]
+            return [*data["prices"], *card_facts]
+        if str(envelope.get("fact_id") or "").startswith("card|"):
             return []
-        if "fact" in (envelope.get("data") or {}):
-            return [envelope["data"]["fact"]]
-        return compile_facts(envelope, tool=self._last_tool, ticker=self.ticker)
+        if isinstance(data, dict) and "fact" in data:
+            return [data["fact"]]
+        return compile_facts(envelope, tool=tool, ticker=self.ticker)
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -572,11 +546,10 @@ def _canonical_number(value: Decimal) -> str:
 
 
 def _result_unit(op: str, unit: str) -> str:
-    """The unit of a comparison result.
+    """A difference keeps the operand's unit; a ratio is dimensionless.
 
-    A difference keeps the operand's unit; a ratio is dimensionless ("ratio",
-    which the shared display rule renders as a plain 4-decimal number); a
-    percentage change is a proportion ("percent").
+    ``ratio`` renders as a plain four-decimal number and ``percent`` as a
+    percentage, both by the shared display rule, so the choice matters.
     """
     if op == "difference":
         return unit
@@ -592,24 +565,24 @@ def derived_fact_id(a: str, b: str, op: str) -> str:
 def compile_facts(envelope: dict, *, tool: str, ticker: str) -> list[dict]:
     """Compile one tool envelope into citable facts, with no guessing.
 
-    Each of the three tools reports its observations in its own shape, and every
-    observation carries the ``fact_id`` the decision tools already assign:
+    Each tool reports observations in its own shape, and every observation
+    carries the ``fact_id`` the decision tools already assign:
 
     * ``get_price_history``: ``data.latest_close`` plus ``rows[]`` whose price
-      and volume fields are ``{value, unit, adjusted}`` objects, and whose own
-      ``fact_id`` identifies the day's raw close;
+      cells are ``{value, unit, adjusted}`` and whose own ``fact_id`` identifies
+      the day's raw close;
     * ``get_indicators``: ``data.latest = {date, values{}}`` plus ``rows[]`` of
-      the same shape;
-    * ``get_fundamental_metrics``: ``data.metrics{name}`` each with its own
-      ``fact_id``, ``unit`` and ``period_end``; unavailable metrics are skipped
-      because a ``null`` value is not a fact.
+      the same shape, each value carrying its own ``fact_id``;
+    * ``get_fundamental_metrics``: ``data.metrics{name}`` each with ``fact_id``,
+      ``unit`` and ``period_end``; an unavailable metric is skipped, because a
+      ``null`` value is not a fact.
 
     An observation without a ``fact_id`` is not citable and is dropped.
     """
     data = envelope.get("data") or {}
     facts: list[dict] = []
 
-    def add(fact_id, name, value, unit, date_or_period, category, source):
+    def add(fact_id, name, value, unit, date_or_period, category):
         if not fact_id or value is None or isinstance(value, bool):
             return
         display = display_text(value, unit, name=name)
@@ -618,39 +591,35 @@ def compile_facts(envelope: dict, *, tool: str, ticker: str) -> list[dict]:
         facts.append({"fact_id": fact_id, "name": name, "value": str(value),
                       "unit": unit, "display": display,
                       "date_or_period": date_or_period, "ticker": ticker,
-                      "category": category, "source": source})
+                      "category": category, "source": envelope.get("source")})
 
     if tool == "get_price_history":
-        # The latest page reports the newest close and its own fact id.
         latest = data.get("latest_close")
         if isinstance(latest, dict) and latest.get("value") is not None:
             add(envelope.get("fact_id"), "close", latest["value"],
-                latest.get("unit") or "USD/share", data.get("data_end_date"),
-                "market", envelope.get("source"))
+                latest.get("unit") or "USD/share", data.get("data_end_date"), "market")
         for row in data.get("rows") or []:
             day = row.get("date")
             for field in ("close", "adjusted_close"):
                 cell = row.get(field)
                 if not isinstance(cell, dict) or cell.get("value") is None:
                     continue
-                add(f"{row.get('fact_id')}|{field}" if field != "close" else row.get("fact_id"),
-                    field, cell["value"], cell.get("unit") or "USD/share", day,
-                    "market", envelope.get("source"))
+                add(row.get("fact_id") if field == "close"
+                    else f"{row.get('fact_id')}|{field}",
+                    field, cell["value"], cell.get("unit") or "USD/share", day, "market")
         return facts
 
     if tool == "get_indicators":
-        for column in ("latest",):
-            block = data.get(column) or {}
-            for name, metric in (block.get("values") or {}).items():
-                add(metric.get("fact_id"), name, metric.get("value"),
-                    metric.get("unit") or "ratio", metric.get("date") or block.get("date"),
-                    "market", envelope.get("source"))
+        block = data.get("latest") or {}
+        for name, metric in (block.get("values") or {}).items():
+            add(metric.get("fact_id"), name, metric.get("value"),
+                metric.get("unit") or "ratio", metric.get("date") or block.get("date"),
+                "market")
         for row in data.get("rows") or []:
-            day = row.get("date")
             for name, metric in (row.get("values") or {}).items():
                 add(metric.get("fact_id"), name, metric.get("value"),
-                    metric.get("unit") or "ratio", metric.get("date") or day,
-                    "market", envelope.get("source"))
+                    metric.get("unit") or "ratio",
+                    metric.get("date") or row.get("date"), "market")
         return facts
 
     if tool == "get_fundamental_metrics":
@@ -658,8 +627,7 @@ def compile_facts(envelope: dict, *, tool: str, ticker: str) -> list[dict]:
             if metric.get("status") != "ok":
                 continue
             add(metric.get("fact_id"), name, metric.get("value"),
-                metric.get("unit") or "ratio", metric.get("period_end"),
-                "fundamental", envelope.get("source"))
+                metric.get("unit") or "ratio", metric.get("period_end"), "fundamental")
         return facts
 
     return facts
