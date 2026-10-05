@@ -93,6 +93,21 @@ if (flow === "answer") {
     return Math.max(0, ...blocks.map((node) => node.scrollWidth - node.clientWidth));
   }));
 }
+if (flow === "derived") {
+  // A computed result is labelled as one, with its formula and sources on hover.
+  const marker = page.locator(".message.assistant .fact-ref.computed").first();
+  report.check("computed_marker_present", await marker.count() > 0);
+  report.check("computed_marker_title", await marker.getAttribute("title"));
+  const row = page.locator(".evidence .fact-row.computed").first();
+  report.check("computed_row_present", await row.count() > 0);
+  report.check("computed_row_title", await row.getAttribute("title"));
+  report.check("computed_row_tag", await row.locator(".fact-name").evaluate(
+    (node) => getComputedStyle(node, "::after").content));
+  report.check("plain_rows_have_no_tag", await page.locator(
+    ".evidence .fact-row:not(.computed)").evaluateAll((nodes) => nodes.every(
+    (node) => getComputedStyle(node.querySelector(".fact-name"), "::after").content === "none"
+      || getComputedStyle(node.querySelector(".fact-name"), "::after").content === "normal")));
+}
 if (flow === "refused") {
   const text = await page.locator(".refusal").innerText();
   report.check("refusal_text", text);

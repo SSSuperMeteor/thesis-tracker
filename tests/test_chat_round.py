@@ -445,3 +445,43 @@ def _question_id(store, conversation):
     users = [item for item in store.messages(conversation["conversation_id"])
              if item["role"] == "user"]
     return users[-1]["message_id"]
+
+
+def test_a_made_up_target_cannot_be_published_as_a_derived_fact(conversation, fixture):
+    """The whole path, not just the tool: the model asks for close x 1.3, is refused,
+    cites the id that result would have had, and the answer is rejected by C03."""
+    from thesis_tracker.webapp.chat.tools import derived_fact_id
+
+    store, conv = conversation
+    seen = {}
+
+    def ask_for_a_target(request):
+        payload = json.loads(request["messages"][-1]["content"])
+        seen["close"] = payload["fact_id"]
+        return {"tool_calls": [tool_call(
+            "compare_facts", {"a": payload["fact_id"], "op": "product", "scale": 1.3},
+            call_id="call_2")]}
+
+    def cite_it(request):
+        last = request["messages"][-1]
+        if last["role"] == "tool":     # only the first citation follows the tool result
+            seen["tool_result"] = json.loads(last["content"])
+        invented = derived_fact_id(seen["close"], "scale:1.3", "product")
+        seen["invented"] = invented
+        return {"content": f"目标是 {{fact:{invented}}}。"}
+
+    client = ScriptedChatClient([
+        {"tool_calls": [tool_call("get_price_history", {"ticker": "AAPL"})]},
+        ask_for_a_target, cite_it,
+        # Two corrections are allowed, so three drafts in all must fail.
+        cite_it, cite_it,
+    ])
+    result = round_for(fixture, store, conv, client, question="你觉得会涨到多少？").run()
+    assert seen["tool_result"]["status"] == "error"
+    assert seen["tool_result"]["reason"]["code"] == "unsupported_scale"
+    assert result["status"] == "rejected"
+    assert result["reason"] == "correction_limit"
+    assert "C03" in {item["rule"] for item in result["violations"]}
+    assert seen["invented"] not in store.facts(conv["conversation_id"])
+    # And the refusal is what the reader sees: no answer, no invented number.
+    assert result["text"] is None

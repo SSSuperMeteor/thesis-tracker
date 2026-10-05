@@ -166,3 +166,23 @@ def test_a_progress_event_that_ended_a_run_carries_a_plain_reason():
     assert "correction_limit" not in first["reason_label"]
     # An unknown code is still reported, in words that say it is unknown.
     assert "brand_new_reason" in second["reason_label"]
+
+
+def test_a_derived_fact_row_carries_its_formula_with_named_operands():
+    """The hover text for a computed result: what was done, to which two numbers."""
+    from thesis_tracker.webapp.service import fact_rows
+
+    derived = {"fact_id": "derived|chat|abc", "name": "compare_difference",
+               "label": "差值", "value": "1.5", "unit": "USD/share",
+               "date_or_period": "2026-09-07", "category": "derived",
+               "source": {"provider": "derived", "formula": "a - b",
+                          "source_fact_ids": ["tiingo|AAPL|2026-09-07|daily",
+                                              "card|c1|stop_loss"]}}
+    plain = {"fact_id": "tiingo|AAPL|2026-09-07|daily", "name": "close", "value": "249.9",
+             "unit": "USD/share", "date_or_period": "2026-09-07", "category": "market",
+             "source": {"provider": "tiingo"}}
+    rows = fact_rows([derived, plain])
+    assert rows[0]["formula_text"] == ("a - b，a = tiingo|AAPL|2026-09-07|daily，"
+                                       "b = card|c1|stop_loss")
+    assert rows[0]["category"] == "derived"
+    assert rows[1]["formula_text"] is None

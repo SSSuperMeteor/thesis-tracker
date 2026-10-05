@@ -360,7 +360,8 @@ def test_the_cards_printed_stop_distance_is_reachable_from_its_own_facts(toolbox
     """
     from thesis_tracker.webapp.chat.tools import ALLOWED_SCALES
 
-    assert ALLOWED_SCALES == (0.5, 1.0, 2.0)
+    # Two named constants: the midpoint's one half, and ratio-to-percent.
+    assert ALLOWED_SCALES == (0.5, 100)
     card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
     prices = {item["field"]: item for item in card["prices"]}
 
@@ -387,12 +388,13 @@ def test_the_cards_printed_stop_distance_is_reachable_from_its_own_facts(toolbox
 def test_a_product_needs_one_of_the_allowed_scales(toolbox, fixture):
     card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
     prices = {item["field"]: item for item in card["prices"]}
-    for scale in (None, 0.7, 3, "0.5"):
+    for scale in (None, 0.7, 3, "0.5", 1.0, 2.0, 1.3, True):
         refused = call(toolbox, "compare_facts", a=prices["entry_low"]["fact_id"],
                        op="product", scale=scale)
         assert refused["status"] == "error", scale
         assert refused["reason"]["code"] == "unsupported_scale"
         assert "0.5" in refused["reason"]["message"]
+        assert "100" in refused["reason"]["message"]
 
 
 def test_a_product_still_refuses_an_unknown_operand(toolbox):
@@ -453,3 +455,138 @@ def test_a_percentage_change_is_a_percentage_not_a_fraction(toolbox):
     span = call(toolbox, "compare_facts", a=prices["entry_low"]["fact_id"],
                 b=prices["entry_low"]["fact_id"], op="difference")["data"]["fact"]
     assert span["display"].endswith("美元/股")
+
+
+
+# -- the scale whitelist: a product may not become a price the model invented --------
+
+def _toolbox_for(fixture, tmp_path, question):
+    """A toolbox whose turn answers a stored user message with this text."""
+    from thesis_tracker.webapp.chat.store import ChatStore
+    from thesis_tracker.webapp.chat.tools import ToolBox
+
+    store = ChatStore(tmp_path / "chat-scale.db")
+    conversation = store.create_conversation("AAPL")
+    message = store.append_message(conversation["conversation_id"], role="user",
+                                   text=question)
+    return ToolBox(store=store, conversation=conversation, as_of="2026-09-07",
+                   fact_db=fixture.fact_db, price_db=fixture.price_db,
+                   card_db=fixture.card_db, message_id=message["message_id"])
+
+
+def _close_fact_id(box):
+    envelope = call(box, "get_price_history", ticker="AAPL")
+    assert envelope["status"] == "ok"
+    return envelope["fact_id"]
+
+
+def test_the_model_cannot_turn_the_close_into_a_target_by_choosing_the_scale(
+        fixture, tmp_path):
+    """close x 1.3 would be a target price the model made up, shown as a fact.
+
+    The user never typed 1.3 and it is not a named constant, so it is refused with
+    a structured error and nothing enters the conversation's evidence set.
+    """
+    box = _toolbox_for(fixture, tmp_path, "现在能买吗？")
+    close = _close_fact_id(box)
+    before = set(box.facts())
+    refused = call(box, "compare_facts", a=close, op="product", scale=1.3)
+    assert refused["status"] == "error"
+    assert refused["reason"]["code"] == "unsupported_scale"
+    assert "1.3" in refused["reason"]["message"]
+    assert set(box.facts()) == before
+    assert not [fact for fact in box.facts().values()
+                if fact["fact_id"].startswith("derived|chat|")]
+
+
+@pytest.mark.parametrize("scale", [1.0, 2.0, 1.05, 0.95, 1.5, 3, 10, 0.25])
+def test_other_scales_the_model_might_try_are_refused_the_same_way(
+        fixture, tmp_path, scale):
+    box = _toolbox_for(fixture, tmp_path, "现在能买吗？")
+    refused = call(box, "compare_facts", a=_close_fact_id(box), op="product",
+                   scale=scale)
+    assert refused["reason"]["code"] == "unsupported_scale"
+
+
+def test_a_number_the_user_typed_in_this_message_may_be_the_scale(fixture, tmp_path):
+    box = _toolbox_for(fixture, tmp_path, "如果它涨到现在的 1.3 倍呢？")
+    close = _close_fact_id(box)
+    allowed = call(box, "compare_facts", a=close, op="product", scale=1.3)
+    assert allowed["status"] == "ok"
+    fact = allowed["data"]["fact"]
+    assert fact["source"]["formula"] == "a * 1.3"
+    assert fact["source"]["scale_source"] == "user_message"
+    assert fact["category"] == "derived"
+    assert fact["fact_id"] in box.facts()
+    # ... but only that number, not a near neighbour of it.
+    refused = call(box, "compare_facts", a=close, op="product", scale=1.31)
+    assert refused["reason"]["code"] == "unsupported_scale"
+
+
+def test_the_user_number_must_be_in_this_message_not_an_earlier_one(fixture, tmp_path):
+    from thesis_tracker.webapp.chat.store import ChatStore
+    from thesis_tracker.webapp.chat.tools import ToolBox
+
+    store = ChatStore(tmp_path / "chat-earlier.db")
+    conversation = store.create_conversation("AAPL")
+    store.append_message(conversation["conversation_id"], role="user",
+                         text="假设涨 1.3 倍")
+    latest = store.append_message(conversation["conversation_id"], role="user",
+                                  text="那现在能买吗？")
+    box = ToolBox(store=store, conversation=conversation, as_of="2026-09-07",
+                  fact_db=fixture.fact_db, price_db=fixture.price_db,
+                  card_db=fixture.card_db, message_id=latest["message_id"])
+    refused = call(box, "compare_facts", a=_close_fact_id(box), op="product",
+                   scale=1.3)
+    assert refused["reason"]["code"] == "unsupported_scale"
+
+
+def test_with_no_user_message_only_the_named_constants_are_available(toolbox, fixture):
+    card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+    low = prices["entry_low"]["fact_id"]
+    assert call(toolbox, "compare_facts", a=low, op="product", scale=0.5)["status"] == "ok"
+    refused = call(toolbox, "compare_facts", a=low, op="product", scale=1.3)
+    assert refused["reason"]["code"] == "unsupported_scale"
+
+
+def test_the_midpoint_scale_is_named_in_the_derived_fact(toolbox, fixture):
+    card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+    span = call(toolbox, "compare_facts", a=prices["entry_high"]["fact_id"],
+                b=prices["entry_low"]["fact_id"], op="difference")["data"]["fact"]
+    half = call(toolbox, "compare_facts", a=span["fact_id"], op="product",
+                scale=0.5)["data"]["fact"]
+    assert half["source"]["scale_source"] == "named:midpoint"
+
+
+def test_the_percent_scale_turns_a_ratio_into_a_percentage(toolbox, fixture):
+    card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+    ratio = call(toolbox, "compare_facts", a=prices["entry_high"]["fact_id"],
+                 b=prices["entry_low"]["fact_id"], op="ratio")["data"]["fact"]
+    percent = call(toolbox, "compare_facts", a=ratio["fact_id"], op="product",
+                   scale=100)["data"]["fact"]
+    assert percent["unit"] == "percent"
+    assert percent["display"].endswith("%")
+    assert percent["source"]["scale_source"] == "named:percent"
+    assert float(percent["value"]) == pytest.approx(float(ratio["value"]) * 100)
+
+
+def test_the_percent_scale_is_not_a_way_to_multiply_a_price_by_one_hundred(
+        toolbox, fixture):
+    card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+    refused = call(toolbox, "compare_facts", a=prices["entry_low"]["fact_id"],
+                   op="product", scale=100)
+    assert refused["status"] == "error"
+    assert refused["reason"]["code"] == "scale_not_applicable"
+    assert "比值" in refused["reason"]["message"]
+
+
+def test_the_schema_tells_the_model_what_it_may_pass(toolbox):
+    schema = next(item for item in toolbox.schemas()
+                  if item["function"]["name"] == "compare_facts")
+    description = schema["function"]["parameters"]["properties"]["scale"]["description"]
+    assert "0.5" in description and "100" in description
+    assert "user" in description.lower()

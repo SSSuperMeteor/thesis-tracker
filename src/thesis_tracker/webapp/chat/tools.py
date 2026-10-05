@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -49,11 +50,22 @@ COMPARE_OPS = {
     "addition": "a + b",
     "product": "a * scale",
 }
-# The only dimensionless factors a comparison may use, written exactly.  They are
-# ratios of published numbers rather than measurements, so they are the one kind
-# of operand the model may supply itself: "half the range" must be expressible
-# without the model doing arithmetic C01 would then reject.
-ALLOWED_SCALES = (0.5, 1.0, 2.0)
+# The factors a ``product`` may use.  A free scale would let the model turn the
+# close into "close x 1.3" and show it as a fact, which is a price target in all
+# but name, so a scale is accepted from exactly two places:
+#
+# * a named constant with one stated purpose -- ``midpoint`` (one half, so the
+#   middle of a buy range is expressible without the model doing arithmetic C01
+#   would reject) and ``percent`` (a ratio times 100, so it reads as a percentage);
+# * a number the user typed in the message being answered, because that is the
+#   user's own premise, not the model's.
+#
+# Anything else is a structured error.  1 and 2 are not here: the first changes
+# nothing and the second doubles a price.
+MIDPOINT_SCALE = 0.5
+PERCENT_SCALE = 100
+NAMED_SCALES = {"midpoint": MIDPOINT_SCALE, "percent": PERCENT_SCALE}
+ALLOWED_SCALES = tuple(NAMED_SCALES.values())
 # A product is the one operation whose unit is not the operands' own, so it is
 # the only one that may combine a quantity with a dimensionless factor.  This is
 # what lets a buy range's midpoint be reached from the card's own fields.
@@ -241,10 +253,15 @@ class ToolBox:
                                                           "pct_change: (a - b) / b. "
                                                           "product: a * scale.")},
                                    "scale": {"type": "number",
-                                             "enum": list(ALLOWED_SCALES),
                                              "description": ("Only for product: the factor to "
-                                                             "multiply a by. Use 0.5 for half "
-                                                             "of a span.")}},
+                                                             "multiply a by. Allowed: 0.5 "
+                                                             "(half of a span, to get a "
+                                                             "midpoint), 100 (only on a "
+                                                             "ratio, to read it as a "
+                                                             "percentage), or a number the "
+                                                             "user typed in the message you "
+                                                             "are answering. Any other value "
+                                                             "is refused.")}},
                                "required": ["a", "b", "op"]}}},
             {"type": "function", "function": {
                 "name": "request_new_card",
@@ -454,44 +471,7 @@ class ToolBox:
                           as_of=self.as_of, tool="compare_facts")
         known = self.facts()
         if op == "product":
-            if scale not in ALLOWED_SCALES:
-                return _error("unsupported_scale",
-                              f"product 需要一个 scale，且只能是 "
-                              f"{'、'.join(str(item) for item in ALLOWED_SCALES)}；"
-                              f"收到 {scale}。",
-                              as_of=self.as_of, tool="compare_facts")
-            right = {"unit": "ratio", "value": str(scale), "fact_id": f"scale|{scale}",
-                     "name": "scale"}
-            left = known.get(a)
-            if left is None:
-                return _error("unknown_fact",
-                              f"编号 {a} 不在这个对话的证据里。"
-                              "只能引用本对话工具返回过的事实或读过的卡价位。",
-                              as_of=self.as_of, tool="compare_facts")
-            second = _decimal(scale)
-            first = _decimal(left["value"])
-            if first is None or second is None:
-                return _error("not_computable", "这个事实不是可运算的数值。",
-                              as_of=self.as_of, tool="compare_facts")
-            result = first * second
-            unit = left["unit"]
-            fact_id = derived_fact_id(a, f"scale:{scale}", op)
-            display = display_text(str(result), unit, name=f"compare_{op}")
-            if display is None:
-                return _error("not_computable", "运算结果无法按现有显示规则呈现。",
-                              as_of=self.as_of, tool="compare_facts")
-            fact = {"fact_id": fact_id, "name": f"compare_{op}",
-                    "label": COMPARE_LABELS[op], "value": _canonical_number(result),
-                    "unit": unit, "display": display,
-                    "date_or_period": left.get("date_or_period"), "ticker": self.ticker,
-                    "category": "derived", "origin": "derived",
-                    "source": {"provider": "derived",
-                               "formula": f"a * {scale:g}",
-                               "source_fact_ids": [a]}}
-            return _envelope(as_of=self.as_of,
-                             data={"fact": fact, "formula": f"a * {scale:g}",
-                                   "operands": {"a": a, "op": op, "scale": scale}},
-                             source=fact["source"], fact_id=fact_id)
+            return self._product(known, a, scale)
         left, right = known.get(a), known.get(b)
         if left is None or right is None:
             missing = a if left is None else b
@@ -556,6 +536,79 @@ class ToolBox:
         return _envelope(as_of=self.as_of,
                          data={"fact": fact, "formula": COMPARE_OPS[op],
                                "operands": {"a": a, "b": b, "op": op}},
+                         source=fact["source"], fact_id=fact_id)
+
+    def _user_numbers(self) -> set[Decimal]:
+        """Numbers the user typed in the message this turn is answering."""
+        if not self.message_id:
+            return set()
+        text = self.store.get_message(self.message_id).get("text") or ""
+        found = set()
+        for token in re.findall(r"\d+(?:[.,]\d+)?", text):
+            number = _decimal(token.replace(",", ""))
+            if number is not None:
+                found.add(number)
+        return found
+
+    def _scale_source(self, scale) -> str | None:
+        """Where an acceptable scale comes from, or ``None`` when it is not allowed."""
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)):
+            return None
+        number = _decimal(scale)
+        if number is None:
+            return None
+        for name, constant in NAMED_SCALES.items():
+            if number == _decimal(constant):
+                return f"named:{name}"
+        if number in self._user_numbers():
+            return "user_message"
+        return None
+
+    def _product(self, known: dict, a: str | None, scale) -> dict:
+        source = self._scale_source(scale)
+        if source is None:
+            return _error("unsupported_scale",
+                          "scale 只能是命名常量 0.5（区间的一半，用来算中点）、"
+                          "100（把比值换算成百分比），或是用户这条消息里自己写过的数字；"
+                          f"收到 {scale}。模型不能自己选一个倍数。",
+                          as_of=self.as_of, tool="compare_facts")
+        left = known.get(a)
+        if left is None:
+            return _error("unknown_fact",
+                          f"编号 {a} 不在这个对话的证据里。"
+                          "只能引用本对话工具返回过的事实或读过的卡价位。",
+                          as_of=self.as_of, tool="compare_facts")
+        factor = _decimal(scale)
+        first = _decimal(left["value"])
+        if first is None or factor is None:
+            return _error("not_computable", "这个事实不是可运算的数值。",
+                          as_of=self.as_of, tool="compare_facts")
+        unit = left["unit"]
+        if factor == _decimal(PERCENT_SCALE) and unit == "ratio":
+            # A ratio times 100 is a percentage, and must read as one.
+            unit = "percent"
+        elif source == "named:percent":
+            return _error("scale_not_applicable",
+                          "100 只用来把无量纲的比值换算成百分比；"
+                          f"这个事实的单位是 {left['unit']}，不是比值。",
+                          as_of=self.as_of, tool="compare_facts")
+        shown = f"{scale:g}"
+        result = first * factor
+        fact_id = derived_fact_id(a, f"scale:{shown}", "product")
+        display = display_text(str(result), unit, name="compare_product")
+        if display is None:
+            return _error("not_computable", "运算结果无法按现有显示规则呈现。",
+                          as_of=self.as_of, tool="compare_facts")
+        fact = {"fact_id": fact_id, "name": "compare_product",
+                "label": COMPARE_LABELS["product"], "value": _canonical_number(result),
+                "unit": unit, "display": display,
+                "date_or_period": left.get("date_or_period"), "ticker": self.ticker,
+                "category": "derived", "origin": "derived",
+                "source": {"provider": "derived", "formula": f"a * {shown}",
+                           "source_fact_ids": [a], "scale_source": source}}
+        return _envelope(as_of=self.as_of,
+                         data={"fact": fact, "formula": f"a * {shown}",
+                               "operands": {"a": a, "op": "product", "scale": scale}},
                          source=fact["source"], fact_id=fact_id)
 
     # -- proposal ------------------------------------------------------------

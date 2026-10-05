@@ -129,3 +129,32 @@ def test_a_proposal_can_be_confirmed_from_the_page(app):
     assert checks["proposal_buttons_after_reload"] == 0
     kinds = [job["kind"] for job in app.store.list()]
     assert kinds.count("analyze") == 1
+
+
+def test_a_computed_result_is_labelled_with_its_formula_and_sources(app, fixture):
+    state = {}
+
+    def compare(messages):
+        card = json.loads(messages[-1]["content"])["data"]
+        prices = {item["field"]: item["fact_id"] for item in card["prices"]}
+        state["high"], state["low"] = prices["entry_high"], prices["entry_low"]
+        return tool("compare_facts", a=prices["entry_high"], b=prices["entry_low"],
+                    op="difference")
+
+    def answer(messages):
+        result = json.loads(messages[-1]["content"])
+        state["derived"] = result["data"]["fact"]["fact_id"]
+        return {"content": f"买点区间有多宽：{{fact:{state['derived']}}}。"}
+
+    _ChatClient.replies = [tool("get_card", card_id=fixture.card_id), compare, answer]
+    result = run(app, flow="derived")
+    checks = result["checks"]
+    assert checks["answer_arrives_without_reload"] is True, result
+    assert checks["computed_marker_present"] is True
+    assert checks["computed_marker_title"].startswith("计算结果｜a - b")
+    assert state["high"] in checks["computed_marker_title"]
+    assert state["low"] in checks["computed_marker_title"]
+    assert checks["computed_row_present"] is True
+    assert checks["computed_row_title"].startswith("计算结果｜a - b")
+    assert "计算结果" in checks["computed_row_tag"]
+    assert checks["plain_rows_have_no_tag"] is True
