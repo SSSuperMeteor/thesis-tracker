@@ -709,7 +709,7 @@ function priceBand(band) {
   // below the axis, each side deep enough for its deepest row.
   const plot = el("div", { class: "band-plot",
     style: `height:${band.plot_height_px}px;--axis-top:${band.axis_from_top_px}px`
-      + `;--band-inset:${band.inset_px}px` }, [
+      + `;--band-inset:${band.inset_px}px;--band-column:${band.column_px}px` }, [
     el("div", { class: "band-axis" }),
     // The bar is a sibling of the axis, not a child: inside the 1px axis its
     // own offset would be applied a second time.
@@ -733,7 +733,7 @@ function priceBand(band) {
   ]);
   return el("div", { class: "band" }, [
     el("p", { class: "section-note", text: "价位带" }),
-    plot,
+    el("div", { class: "band-scroll" }, plot),
     el("div", { class: "band-legend" },
       band.legend.map((item) => el("span", {}, [
         bandShape(item.shape),

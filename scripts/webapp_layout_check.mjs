@@ -26,6 +26,7 @@ const OUT = args.out || "/home/meteor/webapp-shots";
 const CHROME = args.chrome || "/snap/bin/chromium";
 const BASE = `http://127.0.0.1:${PORT}`;
 const WIDTHS = [360, 390, 768, 900, 1024, 1099, 1280, 1440, 1920];
+const WIDES_FOR_BAND = [360, 390, 500, 640, 768, 900, 1024, 1099, 1280, 1440, 1920];
 const MAX_GAP_PX = 64;
 
 await mkdir(OUT, { recursive: true });
@@ -99,6 +100,40 @@ for (const scheme of ["light", "dark"]) {
   const rows = await page.locator(".fact-row").count();
   console.log(`     提示 ${hintCount} 条｜来源分组 ${groups} 组｜事实行 ${rows} 行`);
   if (console_errors.length) problems.push({ scheme, console_errors });
+  await context.close();
+}
+
+// ---- 1b. band labels never overlap at any width ----------------------------
+for (const width of WIDES_FOR_BAND) {
+  const { context, page } = await open("light", { width, height: 900 });
+  await goto(page, `/cards/${cardId}`);
+  const result = await page.evaluate(() => {
+    const boxes = Array.from(document.querySelectorAll(".band-mark .stack")).map((node) => {
+      const box = node.getBoundingClientRect();
+      return { text: node.textContent.slice(0, 8), left: box.left, right: box.right,
+        top: box.top, bottom: box.bottom };
+    });
+    const overlaps = [];
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) {
+        const a = boxes[i];
+        const b = boxes[j];
+        if (a.left < b.right - 1 && b.left < a.right - 1 &&
+            a.top < b.bottom - 1 && b.top < a.bottom - 1) {
+          overlaps.push([a.text, b.text]);
+        }
+      }
+    }
+    const scroller = document.querySelector(".band-scroll");
+    return { count: boxes.length, overlaps,
+      scrolls: scroller ? scroller.scrollWidth > scroller.clientWidth : false };
+  });
+  if (result.overlaps.length) {
+    failures.push({ check: "band label overlap", width, overlaps: result.overlaps });
+  }
+  console.log(`${result.overlaps.length ? "FAIL" : "OK  "} ${String(width).padStart(4)}px `
+    + `价位带标签 ${result.count} 个，重叠 ${result.overlaps.length}`
+    + `${result.scrolls ? "｜轴容器内滚动" : ""}`);
   await context.close();
 }
 

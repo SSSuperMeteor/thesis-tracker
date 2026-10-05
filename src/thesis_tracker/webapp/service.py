@@ -441,9 +441,10 @@ def price_band(card: dict) -> dict | None:
         if isinstance(entry, list) and len(entry) == 2 else None,
         # The buy range as prepared CSS numbers: the page concatenates them and
         # does no arithmetic of its own.
-        # The axis inset the placement above assumed; the CSS calc() uses it to
-        # put a 0% marker where the labels were placed.
+        # The axis inset and column width the placement above assumed; the CSS
+        # uses both so a 0% marker lands exactly where its label was placed.
         "inset_px": round(band_inset_px(markers), 2),
+        "column_px": int(BAND_COLUMN_PX),
         # The buy range as 0-1 fractions of the inset axis, which is the unit the
         # CSS calc() that mirrors the inset expects.
         "range_left_fraction": next((item["fraction"] for item in markers

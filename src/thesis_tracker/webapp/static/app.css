@@ -567,18 +567,25 @@ tr.flash, .fact-row.flash { animation: fact-highlight 1.2s ease-out; }
 .band-plot {
   --band-tick: 12px;
   --band-line: 16px;   /* two lines make the backend's BAND_BLOCK_PX */
-  /* The axis inset is set inline from the backend, which derives it from the
-     labels on this card so a marker at 0% or 100% still fits inside the plot. */
+  /* --band-inset and --band-column are set inline from the backend, which
+     derived them from this card's labels and the column width its placement
+     arithmetic assumed.  The inset is applied inside the width rather than as a
+     margin, so the CSS and the label placement can never drift apart. */
   --band-inset: 0px;
+  --band-column: 640px;
   position: relative;
-  margin: 0 var(--band-inset);
+  width: 100%;
+  /* Below the assumed column width the axis keeps its size and scrolls, exactly
+     like the wide tables, instead of squeezing its labels into each other. */
+  min-width: var(--band-column);
   /* Height is set inline from the backend's label geometry. */
 }
+.band-scroll { overflow-x: auto; max-width: 100%; }
 /* Labels alternate above and below the axis, so both sides get equal room. */
 .band-axis {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: var(--band-inset);
+  right: var(--band-inset);
   /* Set inline to the backend's half-depth so both label sides fit. */
   top: var(--axis-top, 50%);
   height: 1px;
@@ -587,7 +594,9 @@ tr.flash, .fact-row.flash { animation: fact-highlight 1.2s ease-out; }
 .band-mark {
   position: absolute;
   top: var(--axis-top, 50%);
-  /* 0% sits at the start of the inset axis, 100% at its end. */
+  /* 0% sits at the start of the inset axis, 100% at its end; the inset is part
+     of this box's width, so the percentage resolves against the same column the
+     backend placed the labels in. */
   left: calc(var(--band-inset) + (100% - 2 * var(--band-inset)) * var(--mark-fraction, 0));
   transform: translate(-50%, -50%);
   display: flex;
