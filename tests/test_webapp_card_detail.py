@@ -361,3 +361,36 @@ def test_fixture_snapshot_helpers_agree_with_the_fixture_card(fixture):
     snapshot = fixture_snapshot("AAPL", fixture.price_db, fixture.fact_db)
     index = fact_index(snapshot)[0]
     assert index, "the fixture snapshot must produce facts"
+
+
+def test_the_band_legend_uses_the_same_shapes_as_the_chart(detail):
+    """Every legend symbol must be the symbol the plot actually draws.
+
+    The round-2 defect was a legend whose marks did not match the chart: a
+    reader comparing them learns the wrong thing.  This asserts the sets are
+    equal, so a rename on one side cannot pass.
+    """
+    band = detail["price_band"]
+    legend_shapes = [item["shape"] for item in band["legend"]]
+    chart_shapes = {marker["shape"] for marker in band["markers"]}
+    assert legend_shapes == ["stop", "entry", "close", "target"]
+    assert set(legend_shapes) <= chart_shapes | {"entry"}
+    # The entry range's own symbol is the bar, and the entry markers carry it.
+    entries = [marker for marker in band["markers"] if marker["shape"] == "entry"]
+    assert entries, "the buy range must have its own markers"
+    assert all(marker["key"].startswith("entry_") for marker in entries)
+
+
+def test_each_invalidation_line_says_what_it_is(detail):
+    """A machine-checkable threshold and an AI sentence must be told apart.
+
+    Both used to be plain paragraphs, so a reader could not see which line the
+    software enforces and which is explanation.
+    """
+    assert detail["invalidations"], "the fixture card has an invalidation"
+    for item in detail["invalidations"]:
+        assert item["machine_label"] == "机器检查"
+        assert item["explanation_label"] == "说明"
+        machine = "".join(segment["value"] for segment in item["machine_check"])
+        assert machine.startswith("收盘价")
+        assert item["explanation"], "the explanation is kept, just labelled"

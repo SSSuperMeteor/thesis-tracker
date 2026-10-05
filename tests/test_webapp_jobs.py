@@ -131,3 +131,17 @@ def test_parameters_never_contain_a_secret(store):
 def test_the_store_lives_outside_any_cache_directory(store):
     assert "cache" not in store.path.parts
     assert store.path.name == "jobs.db"
+
+
+def test_the_task_page_gets_a_short_identifier_for_every_job(tmp_path):
+    """One identifier form everywhere: eight characters, plus a full copy."""
+    from thesis_tracker.webapp.jobs import JobStore
+    from thesis_tracker.webapp.service import job_view
+
+    store = JobStore(tmp_path / "jobs.db")
+    job = store.create("analyze", {"ticker": "NVDA", "horizon": "mid",
+                                   "as_of": "2026-10-04"})
+    view = job_view(store.get(job["job_id"]))
+    assert view["job_id_short"] == job["job_id"][:8]
+    assert len(view["job_id_short"]) == 8
+    assert view["job_id"] == job["job_id"]

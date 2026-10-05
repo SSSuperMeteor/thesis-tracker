@@ -274,7 +274,8 @@ async function viewOverview(host) {
       group.quarters.forEach((key, index) => {
         const classes = ["cell"];
         if (index === 0) classes.push("year-start");
-        cells.push(renderCell(company.periods[key], classes.join(" "), ticker));
+        cells.push(renderCell(company.periods[key], classes.join(" "), ticker,
+          company.dashed_quarters.includes(key), overview.empty_gap_days));
       });
     }
     const price = company.price;
@@ -291,7 +292,7 @@ async function viewOverview(host) {
       el("span", { class: "spacer" }),
       el("span", { class: "section-note", text: "按财期截止日所在的日历季度分列" }),
     ]),
-    coverageLegend(),
+    coverageLegend(overview),
     el("div", { class: "table-scroll" }, [
       el("table", { class: "coverage" }, [
         el("thead", {}, [el("tr", {}, yearCells),
@@ -307,21 +308,28 @@ async function viewOverview(host) {
   document.title = "总览｜Thesis Tracker";
 }
 
-function coverageLegend() {
+function coverageLegend(overview) {
   const item = (glyph, text) => el("span", {}, [glyph, el("span", { text })]);
   return el("div", { class: "legend" }, [
     item(el("span", { class: "legend-glyph", text: "K" }), "年报 10-K"),
     item(el("span", { class: "legend-glyph", text: "Q" }), "季报 10-Q"),
     item(el("span", { class: "legend-glyph amended", text: "K" }), "修订申报"),
-    item(el("span", { class: "legend-glyph missing", "aria-hidden": "true" }), "没有财报"),
+    // The dashed box means one thing only: a real hole in this company's filing
+    // history.  A quarter it simply has not reported is left blank.
+    item(el("span", { class: "legend-glyph missing", "aria-hidden": "true" }),
+      overview.empty_gap_label),
   ]);
 }
 
-function renderCell(period, className, ticker) {
+function renderCell(period, className, ticker, dashed, gapDays) {
   if (!period) {
-    return el("td", { class: `${className} is-missing`, title: "这一季度没有已存档的财报" }, [
-      el("span", {}, el("span", { "aria-hidden": "true" })),
-    ]);
+    return dashed
+      ? el("td", {
+        class: `${className} is-missing`,
+        title: `这一季度没有已存档的财报：${ticker} 相邻两次财报相隔超过 `
+          + `${String(gapDays)} 天`,
+      }, [el("span", {}, el("span", { "aria-hidden": "true" }))])
+      : el("td", { class: `${className} is-blank` });
   }
   const entries = period.entries || [];
   const items = entries.map((entry) => {
@@ -639,11 +647,19 @@ async function viewCard(host, cardId) {
       ? block("目标依据", el("p", { class: "entry" }, segments(card.target_rationale, pick)))
       : null,
     block("失效条件", card.invalidations.map((item) => el("div", { class: "entry" }, [
-      el("p", { class: "machine" }, segments(item.machine_check, pick)),
-      el("p", { class: "explain" }, segments(item.explanation, pick)),
+      el("p", { class: "machine" }, [
+        el("span", { class: "line-label", text: item.machine_label }),
+        ...segments(item.machine_check, pick),
+      ]),
+      el("p", { class: "explain" }, [
+        el("span", { class: "line-label", text: item.explanation_label }),
+        ...segments(item.explanation, pick),
+      ]),
     ]))),
     block(card.auto_computed_heading, [
-      table([{ label: "项目" }, { label: "结果" }],
+      // The value column is right-aligned, so its header is too: a header that
+      // sits on the other side of the column reads as a different column.
+      table([{ label: "项目" }, { label: "结果", numeric: true }],
         card.auto_computed.map((item) => el("tr", {}, [
           el("th", { scope: "row", text: item.label }),
           el("td", { class: "num", text: item.text }),
@@ -864,7 +880,10 @@ function stepLine(event) {
 async function viewJob(host, jobId) {
   const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
   clear(host);
-  host.append(pageHead(job.kind_label, `任务 ${job.job_id}`));
+  host.append(pageHead(job.kind_label, null));
+  host.append(el("div", { class: "rows" }, [
+    copyRow("任务编号", job.job_id_short, job.job_id),
+  ]));
   host.append(el("div", { class: "toolbar" }, [
     jobState(job),
     el("span", { class: "meta", text: job.parameter_summary }),

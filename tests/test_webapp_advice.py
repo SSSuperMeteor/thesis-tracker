@@ -304,7 +304,9 @@ def test_the_band_spans_the_reading_column_and_alternates_sides():
     assert sides[0] != sides[1]
     # The axis geometry is the reading column's own width, with no inset.
     assert band["plot_height_px"] > 0
-    assert [item["shape"] for item in band["legend"]] == ["stop", "range", "close",
+    # The legend's symbols are the chart's own: the buy range is drawn as the
+    # `entry` bar, so the legend calls it `entry` too.
+    assert [item["shape"] for item in band["legend"]] == ["stop", "entry", "close",
                                                           "target"]
     # The buy range's bar geometry arrives as 0-1 fractions for the CSS calc()
     # that mirrors the axis inset; the page does no arithmetic.

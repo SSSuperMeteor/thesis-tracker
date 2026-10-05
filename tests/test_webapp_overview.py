@@ -218,3 +218,110 @@ def test_the_summary_survives_a_database_with_no_prices(tmp_path, fixture):
     assert built["price_summary"]["latest_price_date"] is None
     assert built["price_summary"]["lag_days"] is None
     assert built["price_summary"]["missing"] == len(built["companies"])
+
+
+# -- the dashed empty box: only a real hole in the filing history ------------
+#
+# The threshold is an experienced one, not a reporting standard: two
+# consecutive filings for one issuer are normally a quarter apart, so a span of
+# more than 135 calendar days between the filings that bracket an empty quarter
+# means the quarter is genuinely absent rather than simply not reported.
+
+def test_an_empty_quarter_inside_a_normal_cadence_is_not_marked(fixture):
+    from thesis_tracker.webapp.service import EMPTY_GAP_DAYS
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    assert EMPTY_GAP_DAYS == 135
+    built = build_overview(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                           card_db=fixture.card_db,
+                           reference_date=fixture.reference_date)
+    for company in built["companies"].values():
+        # Dashed columns are exactly the ones the rule flagged, and none of them
+        # carries a filing: a real filing is never drawn as a hole.
+        assert company["dashed_quarters"] == sorted(company["dashed_quarters"])
+        for key in company["dashed_quarters"]:
+            assert key in built["quarters"], key
+            assert company["periods"].get(key, {}).get("entries") in (None, []), key
+        for key, cell in company["periods"].items():
+            assert cell["dashed"] is (key in company["dashed_quarters"] and not cell["entries"])
+
+
+def test_a_wide_hole_between_two_filings_is_marked_and_a_narrow_one_is_not(tmp_path):
+    """The rule is measured on the filings that bracket the hole."""
+    from thesis_tracker.webapp.service import EMPTY_GAP_DAYS
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    built = build_overview(fact_db=_straddling_fact_db(tmp_path),
+                           price_db=tmp_path / "absent-prices.db",
+                           card_db=tmp_path / "absent-cards.db",
+                           reference_date="2026-10-04")
+    # WIDE: a period ending 2025-03-31 filed 2025-05-01, the next ending
+    # 2025-12-31 filed 2026-02-01 -> 276 days apart, so 2025Q2/Q3/Q4 are marked.
+    # NARROW: a period ending 2026-03-31 filed 2026-05-01, the next ending
+    # 2026-06-30 filed 2026-08-01 -> 92 days apart, so no hole exists at all.
+    wide = built["companies"]["WIDE"]
+    narrow = built["companies"]["NARROW"]
+    # WIDE reports 2025-03-31 and then 2025-12-31, so Q2 and Q3 are one hole.
+    assert wide["dashed_quarters"] == ["2025Q2", "2025Q3"]
+    assert "2025Q2" not in wide["periods"]  # an empty column, not a filing
+    assert wide["periods"]["2025Q4"]["period_end"] == "2025-12-31"
+    assert wide["periods"]["2025Q4"]["dashed"] is False
+    # NARROW's two filings are 92 days apart: no hole to mark.
+    assert narrow["dashed_quarters"] == []
+    assert narrow["periods"]["2026Q2"]["entries"]
+    assert EMPTY_GAP_DAYS == 135
+
+
+def test_nothing_is_marked_after_a_companys_newest_filing(tmp_path):
+    """A company that stopped reporting is not a series of holes.
+
+    Marking every quarter after the last filing would fill the right-hand side
+    of the table with dashes that say nothing a reader can act on.
+    """
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    built = build_overview(fact_db=_straddling_fact_db(tmp_path),
+                           price_db=tmp_path / "absent-prices.db",
+                           card_db=tmp_path / "absent-cards.db",
+                           reference_date="2026-10-04")
+    for company in built["companies"].values():
+        newest = max(company["periods"])
+        assert all(key <= newest for key in company["dashed_quarters"])
+        first = min(company["periods"])
+        assert all(key >= first for key in company["dashed_quarters"])
+    # The axis itself does not extend past the newest period any company reports.
+    assert built["quarters"][-1] <= max(
+        key for item in built["companies"].values() for key in item["periods"])
+
+
+def test_the_dashed_box_legend_says_what_it_means(fixture):
+    """One legend entry, and it describes the threshold, not "no data"."""
+    from thesis_tracker.webapp.service import EMPTY_GAP_DAYS, EMPTY_GAP_LABEL
+
+    assert EMPTY_GAP_LABEL == f"相邻财报相隔超过 {EMPTY_GAP_DAYS} 天"
+    assert "没有财报" not in EMPTY_GAP_LABEL
+
+
+def _straddling_fact_db(tmp_path):
+    """A miniature fact store whose period ends straddle a quarter boundary."""
+    import sqlite3
+
+    path = tmp_path / "straddling.db"
+    with sqlite3.connect(path) as connection:
+        connection.executescript("""
+            CREATE TABLE filing_snapshots (
+                accession TEXT PRIMARY KEY, original_accession TEXT, ticker TEXT,
+                cik TEXT, form TEXT, period_end TEXT, filed_at TEXT,
+                fiscal_year INTEGER, fiscal_period TEXT, registered_count INTEGER);
+        """)
+        rows = [
+            # WIDE: 276 days between the filings that bracket 2025Q2 and 2025Q3.
+            ("w-1", "w-1", "WIDE", "1", "10-Q", "2025-03-31", "2025-05-01", 2025, "Q1", 1),
+            ("w-2", "w-2", "WIDE", "1", "10-K", "2025-12-31", "2026-02-01", 2025, "FY", 1),
+            # NARROW: consecutive filings 92 days apart, ending inside a quarter.
+            ("n-1", "n-1", "NARROW", "2", "10-Q", "2026-03-31", "2026-05-01", 2026, "Q1", 1),
+            ("n-2", "n-2", "NARROW", "2", "10-Q", "2026-06-30", "2026-08-01", 2026, "Q2", 1),
+        ]
+        connection.executemany(
+            "INSERT INTO filing_snapshots VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+    return path

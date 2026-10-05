@@ -63,6 +63,15 @@ USAGE_WINDOW = 5
 # the language from it rather than renaming a section the CLI still prints.
 AUTO_COMPUTED_HEADING = "自动计算（Python）"
 
+# An empty coverage cell is drawn as a dashed box only when it is a real hole in
+# a company's filing history.  Two consecutive filings by one issuer are normally
+# a quarter apart, so a span wider than this between the filings that bracket the
+# empty quarter means the quarter is genuinely absent.  The number is an
+# experienced threshold, not a reporting standard, and it is the only thing the
+# dashed box ever means: everything else stays blank.
+EMPTY_GAP_DAYS = 135
+EMPTY_GAP_LABEL = f"相邻财报相隔超过 {EMPTY_GAP_DAYS} 天"
+
 
 def quarter_key(period_end: str) -> str:
     """Calendar-quarter bucket of a real period end date, e.g. 2026-04-25 -> 2026Q2.
@@ -211,17 +220,65 @@ def price_overview(companies: dict[str, dict], reference: str) -> dict:
     }
 
 
-def trim_quarters(quarters: list[str], companies: dict[str, dict]) -> list[str]:
-    """Drop leading columns no company has a filing in.
+def quarter_range(first: str, last: str) -> list[str]:
+    """Every calendar quarter from ``first`` to ``last``, inclusive."""
+    start_year, start_quarter = int(first[:4]), int(first[-1])
+    end_year, end_quarter = int(last[:4]), int(last[-1])
+    keys = []
+    year, quarter = start_year, start_quarter
+    while (year, quarter) <= (end_year, end_quarter):
+        keys.append(f"{year}Q{quarter}")
+        quarter += 1
+        if quarter == 5:
+            year, quarter = year + 1, 1
+    return keys
 
-    Only the leading edge is trimmed: a gap between two reported quarters is
-    real information about a company's filing history and stays visible.
+
+def trim_quarters(quarters: list[str], companies: dict[str, dict]) -> list[str]:
+    """Drop leading columns no company has a filing in, and fill the interior.
+
+    Only the leading edge is trimmed: a gap between two reported quarters is real
+    information about a company's filing history and stays visible, which means
+    the axis must be *contiguous* between the first and last quarter that carries
+    a filing.  A missing column would silently delete the hole instead of drawing
+    it.
     """
-    filled = {key for company in companies.values() for key in company["periods"]}
-    start = 0
-    while start < len(quarters) and quarters[start] not in filled:
-        start += 1
-    return quarters[start:]
+    filled = sorted({key for company in companies.values() for key in company["periods"]})
+    if not filled:
+        return []
+    return quarter_range(filled[0], filled[-1])
+
+
+def mark_empty_cells(company: dict, quarters: list[str]) -> None:
+    """Flag the columns that sit inside a hole in this company's filing history.
+
+    ``periods`` keeps exactly the quarters that carry a filing: the table derives
+    its cells from the filing rows, and inventing entries for empty columns would
+    quietly change what the page counts as coverage.  Instead a set of *dashed*
+    columns is computed for the frontend to draw.
+
+    The span is measured between the filings that bracket the hole, not between
+    calendar dates: only the issuer's own cadence can say whether a quarter is
+    missing or merely not reported yet.  Nothing before the first filing or after
+    the newest one is dashed, because a company that stopped reporting is not a
+    series of holes, and a company with fewer than two filings has no cadence.
+    """
+    periods = company["periods"]
+    reported = [key for key in quarters if periods.get(key, {}).get("entries")]
+    dashed: set[str] = set()
+    for index in range(len(reported) - 1):
+        left, right = reported[index], reported[index + 1]
+        left_end = date.fromisoformat(periods[left]["period_end"])
+        right_end = date.fromisoformat(periods[right]["period_end"])
+        # The hole is what lies strictly between the two period ends, and it is
+        # wide only when the issuer's own two filings are more than the threshold
+        # apart: the later period end minus the earlier one.
+        if (right_end - left_end).days <= EMPTY_GAP_DAYS:
+            continue
+        dashed.update(quarters[quarters.index(left) + 1:quarters.index(right)])
+    for key, cell in periods.items():
+        cell["dashed"] = key in dashed and not cell["entries"]
+    company["dashed_quarters"] = sorted(dashed)
 
 
 def card_count(card_db: Path | str, ticker: str) -> int:
@@ -264,9 +321,13 @@ def overview(*, fact_db: Path | str = DEFAULT_FACT_DB,
         }
     quarters = trim_quarters(sorted({key for company in companies.values()
                                      for key in company["periods"]}), companies)
+    for company in companies.values():
+        mark_empty_cells(company, quarters)
     return {
         "reference_date": reference,
         "stale_after_days": PRICE_STALENESS_DAYS,
+        "empty_gap_days": EMPTY_GAP_DAYS,
+        "empty_gap_label": EMPTY_GAP_LABEL,
         "price_command": "uv run prices-ingest",
         "quarters": quarters,
         "companies": companies,
@@ -429,7 +490,7 @@ def price_band(card: dict) -> dict | None:
         # The shapes and what they mean, so the legend is not written twice.
         "legend": [
             {"shape": "stop", "label": "止损"},
-            {"shape": "range", "label": "买点区间"},
+            {"shape": "entry", "label": "买点区间"},
             {"shape": "close", "label": "收盘价"},
             {"shape": "target", "label": "目标"},
         ],
@@ -756,6 +817,9 @@ def job_view(job: dict) -> dict:
     result = job.get("result")
     view = {
         **job,
+        # Eight characters is the one identifier form the pages show; the full
+        # value stays available for the copy button.
+        "job_id_short": str(job.get("job_id") or "")[:8],
         "created_at": display.format_timestamp(job.get("created_at")),
         "started_at": display.format_timestamp(job.get("started_at")),
         "finished_at": display.format_timestamp(job.get("finished_at")),
@@ -855,6 +919,10 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
                 threshold, "USD/share", name="close"),
             "machine_check": _line(check),
             "explanation": _segments(item.get("text") or "", index),
+            # The two lines look alike but are not the same kind of statement:
+            # one is enforced by the software, the other is written by the model.
+            "machine_label": "机器检查",
+            "explanation_label": "说明",
         })
 
     # Resolve which analysis run wrote this card, then show only that run's

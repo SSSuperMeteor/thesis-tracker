@@ -130,7 +130,14 @@ main { min-width: 0; padding: 20px 24px 48px 24px; }
   border-bottom: 1px solid var(--rule);
   margin-bottom: 16px;
 }
-.page-head .meta { color: var(--ink-2); font-size: 12px; }
+.page-head .meta {
+  color: var(--ink-2);
+  font-size: 12px;
+  /* Long content wraps onto its own line instead of being clipped: a truncated
+     creation time is a loss the reader cannot even notice. */
+  flex: 1 1 auto;
+  min-width: 0;
+}
 
 @media (max-width: 899px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
@@ -280,8 +287,10 @@ thead .stick { z-index: 4; background: var(--surface-2); }
   background: var(--accent);
   border-radius: 50%;
 }
-/* A cell with filings carries a light tint; a missing one stays a dashed
-   outline.  Colour is never the only difference: the glyphs differ too. */
+/* A cell with filings carries a light tint; a real hole in the filing history
+   stays a dashed outline; a quarter that simply was not reported is blank, so
+   the dashed box keeps exactly one meaning.  Colour is never the only
+   difference: the glyphs differ too. */
 .cell.has-filing { background: var(--surface-2); }
 .cell.is-missing span span,
 .cell.is-missing > span {
@@ -893,3 +902,11 @@ ol.steps .detail { font-variant-numeric: tabular-nums; }
   color: var(--ink-2);
   font-size: 12px;
 }
+
+/* The two invalidation lines look alike but are not the same kind of claim:
+   one is enforced by the software, the other is written by the model. */
+.entry .line-label {
+  color: var(--ink-2);
+  margin-right: 6px;
+}
+.entry .line-label::after { content: "："; }

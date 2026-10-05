@@ -154,3 +154,23 @@ def test_no_page_or_api_response_contains_a_secret(server):
                  f"/api/cards/{'c' * 36}", "/api/usage", "/api/jobs"):
         _, _, body = get(server, path)
         assert SENTINEL not in body.decode(), path
+
+
+def test_the_page_header_wraps_instead_of_clipping_its_second_line():
+    """The creation time must never be cut off; it wraps on a narrow window.
+
+    A single-line header with `overflow: hidden` truncated it silently, which is
+    the kind of loss a reader cannot even notice.
+    """
+    from pathlib import Path
+
+    css = (Path(__file__).resolve().parents[1]
+           / "src/thesis_tracker/webapp/static/app.css").read_text(encoding="utf-8")
+    block = re.search(r"\.page-head\s*\{([^}]*)\}", css)
+    assert block is not None
+    rules = block.group(1)
+    assert "flex-wrap: wrap" in rules
+    assert "overflow: hidden" not in rules
+    meta = re.search(r"\.page-head \.meta\s*\{([^}]*)\}", css)
+    assert meta is not None
+    assert "white-space: nowrap" not in meta.group(1)

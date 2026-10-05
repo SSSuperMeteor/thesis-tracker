@@ -105,9 +105,22 @@ def test_the_detail_page_prints_the_short_id_once_and_offers_the_full_one():
 
 
 def test_the_overview_ships_a_legend():
+    """All four marks are explained, and the dashed one says what it means.
+
+    The dashed box's text is a backend string now, so the frontend is checked for
+    the three glyph names it names itself and for reading the fourth from the
+    payload rather than spelling its own meaning.
+    """
     script = read(STATIC / "app.js")
-    for phrase in ("年报 10-K", "季报 10-Q", "修订申报", "没有财报"):
+    for phrase in ("年报 10-K", "季报 10-Q", "修订申报"):
         assert phrase in script, phrase
+    assert "empty_gap_label" in script
+    assert "没有财报" not in script
+
+    from thesis_tracker.webapp.service import EMPTY_GAP_DAYS, EMPTY_GAP_LABEL
+
+    assert EMPTY_GAP_LABEL == f"相邻财报相隔超过 {EMPTY_GAP_DAYS} 天"
+    assert EMPTY_GAP_DAYS == 135
 
 
 def test_a_card_cell_with_filings_is_visually_distinct_from_a_missing_one():
