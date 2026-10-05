@@ -255,6 +255,14 @@ def _free_numbers(text: str) -> list[Decimal]:
             if (number := _number(match.group())) is not None]
 
 
+# Chat validation (webapp/chat) must apply the card validator's naked-number
+# rule and action-word list rather than keeping a second copy that could drift.
+# These two module-level aliases expose the same objects; no behaviour in this
+# module changes because of them, and each rule stays defined in one place.
+free_numbers = _free_numbers
+chat_action_words = ACTION_WORDS
+
+
 def validate_card(card: dict, snapshot: dict, *,
                   version: str = VALIDATOR_VERSION) -> list[dict]:
     """Return every mechanical violation. A nonempty result forbids publication."""
