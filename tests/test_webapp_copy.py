@@ -133,3 +133,21 @@ def test_only_clickable_text_uses_the_accent_colour():
         match.group(1).strip()
         for match in re.finditer(r"([^{}]+)\{[^}]*color:\s*var\(--ink\)", css)
     ]
+
+
+def test_a_legacy_progress_event_is_rendered_as_words():
+    """Stored jobs from before the usage event existed must not show raw names."""
+    script = read(STATIC / "app.js")
+    step = script.split("function stepLine")[1].split("async function viewJob")[0]
+    assert 'event.event === "round_start"' in step, "the legacy event needs its own line"
+    assert "旧记录" in step
+    # The fallback branch never prints the raw name on its own.
+    assert '["事件", event.event]' not in step
+
+
+def test_every_progress_event_kind_has_its_own_wording():
+    script = read(STATIC / "app.js")
+    step = script.split("function stepLine")[1].split("async function viewJob")[0]
+    for kind in ("prefetch", "round_start", "round", "tool_call", "draft_rejected",
+                 "passed", "rejected"):
+        assert f'"{kind}"' in step, kind

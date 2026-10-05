@@ -399,7 +399,14 @@ table.list [translate="no"] { translate: no; }
 }
 .row:last-child { border-bottom: 0; }
 .row .label { color: var(--ink-2); }
-.row .value { text-align: right; font-variant-numeric: tabular-nums; }
+.row .value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .row .value .unit { color: var(--ink-2); font-size: 12px; margin-left: 4px; }
 
 /* ---------------------------------------------------------------
@@ -560,7 +567,11 @@ tr.flash, .fact-row.flash { animation: fact-highlight 1.2s ease-out; }
 .band-plot {
   --band-tick: 12px;
   --band-line: 16px;   /* two lines make the backend's BAND_BLOCK_PX */
+  /* The axis inset is set inline from the backend, which derives it from the
+     labels on this card so a marker at 0% or 100% still fits inside the plot. */
+  --band-inset: 0px;
   position: relative;
+  margin: 0 var(--band-inset);
   /* Height is set inline from the backend's label geometry. */
 }
 /* Labels alternate above and below the axis, so both sides get equal room. */
@@ -568,13 +579,16 @@ tr.flash, .fact-row.flash { animation: fact-highlight 1.2s ease-out; }
   position: absolute;
   left: 0;
   right: 0;
-  top: 50%;
+  /* Set inline to the backend's half-depth so both label sides fit. */
+  top: var(--axis-top, 50%);
   height: 1px;
   background: var(--rule);
 }
 .band-mark {
   position: absolute;
-  top: 50%;
+  top: var(--axis-top, 50%);
+  /* 0% sits at the start of the inset axis, 100% at its end. */
+  left: calc(var(--band-inset) + (100% - 2 * var(--band-inset)) * var(--mark-fraction, 0));
   transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
@@ -590,6 +604,7 @@ tr.flash, .fact-row.flash { animation: fact-highlight 1.2s ease-out; }
 }
 .band-mark.side-above .stack { bottom: var(--band-tick); margin-bottom: var(--label-offset, 0px); }
 .band-mark.side-below .stack { top: var(--band-tick); margin-top: var(--label-offset, 0px); }
+
 .band-mark .name {
   display: block;
   font-size: 12px;
@@ -622,13 +637,17 @@ tr.flash, .fact-row.flash { animation: fact-highlight 1.2s ease-out; }
 }
 .band-mark.shape-entry .name { color: var(--accent); }
 /* The buy range reads as one bar between its two ends. */
+/* The buy range reads as one bar between its two markers; it starts at the
+   inset axis, exactly where the markers are placed. */
 .band-range {
   position: absolute;
-  top: 50%;
+  top: var(--axis-top, 50%);
   height: 3px;
   margin-top: -1px;
   background: var(--accent);
   opacity: .55;
+  left: calc(var(--band-inset) + (100% - 2 * var(--band-inset)) * var(--range-left-fraction, 0));
+  width: calc((100% - 2 * var(--band-inset)) * var(--range-width-fraction, 0));
 }
 .band-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .band-legend .band-shape.shape-stop,

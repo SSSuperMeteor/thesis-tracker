@@ -708,18 +708,21 @@ function priceBand(band) {
   // The plot's height is the backend's label geometry: labels sit above and
   // below the axis, each side deep enough for its deepest row.
   const plot = el("div", { class: "band-plot",
-    style: `height:${band.plot_height_px}px` }, [
-    el("div", { class: "band-axis" }, [
-      entry.length === 2 && band.range_width_percent !== null
-        ? el("span", {
-          class: "band-range",
-          style: `left:${band.range_left_percent}%;width:${band.range_width_percent}%`,
-        })
-        : null,
-    ]),
+    style: `height:${band.plot_height_px}px;--axis-top:${band.axis_from_top_px}px`
+      + `;--band-inset:${band.inset_px}px` }, [
+    el("div", { class: "band-axis" }),
+    // The bar is a sibling of the axis, not a child: inside the 1px axis its
+    // own offset would be applied a second time.
+    entry.length === 2 && band.range_width_fraction !== null
+      ? el("span", {
+        class: "band-range",
+        style: `--range-left-fraction:${band.range_left_fraction}`
+          + `;--range-width-fraction:${band.range_width_fraction}`,
+      })
+      : null,
     ...marks.map((mark) => el("span", {
       class: `band-mark side-${mark.label_side} shape-${mark.shape}`,
-      style: `left:${mark.percent}%;--label-offset:${mark.label_offset_px || 0}px`,
+      style: `--mark-fraction:${mark.fraction};--label-offset:${mark.label_offset_px || 0}px`,
     }, [
       bandShape(mark.shape),
       el("span", { class: "stack" }, [
@@ -783,6 +786,11 @@ function stepLine(event) {
   if (event.event === "prefetch") {
     return ["准备", `${when}读取本地数据 ${String(event.tool_calls)} 次`];
   }
+  // Jobs recorded before the usage-carrying event existed still render as text,
+  // never as a raw event name.
+  if (event.event === "round_start") {
+    return ["模型", `${when}第 ${String(event.round)} 轮（旧记录，没有用量）`];
+  }
   if (event.event === "round") {
     // The usage on this event is what the round actually spent, plus the
     // running total, so the list never shows a placeholder zero.
@@ -804,7 +812,7 @@ function stepLine(event) {
   if (event.event === "rejected") {
     return ["拒绝", `原因 ${event.reason}${(event.rules || []).length ? `｜规则 ${(event.rules || []).join("、")}` : ""}`];
   }
-  return ["事件", event.event];
+  return ["其他", "这一步没有可显示的说明"];
 }
 
 async function viewJob(host, jobId) {

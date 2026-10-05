@@ -430,22 +430,29 @@ def price_band(card: dict) -> dict | None:
         "block_px": BAND_BLOCK_PX,
         "tick_px": BAND_TICK_PX,
         "tail_px": BAND_TAIL_PX,
-        "plot_height_px": (BAND_TICK_PX + BAND_BLOCK_PX
-                           + max((item["label_offset_px"] for item in markers), default=0)
-                           + BAND_TAIL_PX),
+        # Labels sit on both sides of the axis, so each side gets the full depth
+        # (tick gap + one label block + that side's deepest row) and the axis
+        # runs through the middle.
+        "plot_height_px": 2 * _band_depth_px(markers),
+        "axis_from_top_px": _band_depth_px(markers),
         "entry_low": display_text(_number(entry[0]), "USD/share", name="close")
         if isinstance(entry, list) and len(entry) == 2 else None,
         "entry_high": display_text(_number(entry[1]), "USD/share", name="close")
         if isinstance(entry, list) and len(entry) == 2 else None,
         # The buy range as prepared CSS numbers: the page concatenates them and
         # does no arithmetic of its own.
-        "range_left_percent": next((item["percent"] for item in markers
-                                    if item["key"] == "entry_low"), None),
-        "range_width_percent": (
-            f"{Decimal(str(next((item['percent'] for item in markers
-                                 if item['key'] == 'entry_high'), 0)))
-               - Decimal(str(next((item['percent'] for item in markers
-                                   if item['key'] == 'entry_low'), 0))):.2f}"
+        # The axis inset the placement above assumed; the CSS calc() uses it to
+        # put a 0% marker where the labels were placed.
+        "inset_px": round(band_inset_px(markers), 2),
+        # The buy range as 0-1 fractions of the inset axis, which is the unit the
+        # CSS calc() that mirrors the inset expects.
+        "range_left_fraction": next((item["fraction"] for item in markers
+                                     if item["key"] == "entry_low"), None),
+        "range_width_fraction": (
+            round(next((item["fraction"] for item in markers
+                        if item["key"] == "entry_high"), Decimal(0))
+                  - next((item["fraction"] for item in markers
+                          if item["key"] == "entry_low"), Decimal(0)), 4)
             if any(item["key"] == "entry_low" for item in markers) else None),
     }
 
@@ -553,10 +560,17 @@ def adjust_auto_computed(items: list[dict]) -> list[dict]:
     return adjusted
 
 
-# The axis spans the reading column, whose width app.css fixes at 640px; 12px is
-# a deliberately conservative advance width for one CJK character.
+# The axis spans the reading column, whose width app.css fixes at 640px, inset
+# by 4.5em on each side (the CSS mirrors these two numbers in --band-inset and
+# the marker calc()); 12px is a deliberately conservative advance width for one
+# CJK character.
 BAND_COLUMN_PX = 640.0
-BAND_INSET_PX = 0.0
+# Clear space kept between two label boxes before they may share a row.
+BAND_GAP_PX = 6.0
+# The axis is inset so that the label of a marker at 0% or 100% still fits
+# inside the plot; the inset is derived from the labels actually present rather
+# than hand-tuned, because it depends on the longest price string on the card.
+BAND_INSET_PAD_PX = 10.0
 BAND_CHAR_PX = 12.0
 # Labels alternate above and below the axis, so only every second row shares a
 # side and the geometry is symmetric.
@@ -573,6 +587,29 @@ BAND_TICK_PX = 22
 BAND_TAIL_PX = 8
 
 
+def _band_depth_px(markers: list[dict]) -> int:
+    """Room one side of the axis needs: tick gap, one label block, deepest row."""
+    deepest = 0
+    for side in BAND_SIDES:
+        offsets = [item["label_offset_px"] for item in markers
+                   if item.get("label_side") == side]
+        if offsets:
+            deepest = max(deepest, max(offsets))
+    return BAND_TICK_PX + BAND_BLOCK_PX + (deepest if markers else 0) + BAND_TAIL_PX
+
+
+def label_width_px(marker: dict) -> float:
+    """A conservative rendered width for one marker's label block."""
+    return max(len(marker["label"]), len(marker["value"])) * BAND_CHAR_PX
+
+
+def band_inset_px(markers: list[dict]) -> float:
+    """Half the widest label plus a margin: why a 0% marker still fits."""
+    if not markers:
+        return 0.0
+    return max(label_width_px(marker) for marker in markers) / 2 + BAND_INSET_PAD_PX
+
+
 def _place_labels(markers: list[dict]) -> None:
     """Place band labels so none overlaps another, alternating above and below.
 
@@ -581,17 +618,21 @@ def _place_labels(markers: list[dict]) -> None:
     here because only here are the axis width and the label widths both known;
     the page converts the row index into a CSS length.
     """
-    axis_px = max(1.0, BAND_COLUMN_PX - 2 * BAND_INSET_PX)
+    inset = band_inset_px(markers)
+    axis_px = max(1.0, BAND_COLUMN_PX - 2 * inset)
     placed: dict[tuple[str, int], list[tuple[float, float]]] = {}
     for index, marker in enumerate(markers):
-        centre = (marker["position"] / 100) * axis_px
-        half = max(len(marker["label"]), len(marker["value"])) * BAND_CHAR_PX / 2
+        # Positions are measured along the inset axis, which is what the CSS
+        # calc() does too.
+        centre = inset + (marker["position"] / 100) * axis_px
+        half = label_width_px(marker) / 2
         row = 0
         while True:
             side = BAND_SIDES[index % len(BAND_SIDES)] if row == 0 else (
                 BAND_SIDES[(index + row) % len(BAND_SIDES)])
             occupied = placed.setdefault((side, row), [])
-            if all(centre - half > right + 6 or centre + half < left - 6
+            if all(centre - half > right + BAND_GAP_PX
+                   or centre + half < left - BAND_GAP_PX
                    for left, right in occupied):
                 occupied.append((centre - half, centre + half))
                 marker["label_row"] = row

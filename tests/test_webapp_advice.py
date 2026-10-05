@@ -304,11 +304,15 @@ def test_the_band_spans_the_reading_column_and_alternates_sides():
     assert band["plot_height_px"] > 0
     assert [item["shape"] for item in band["legend"]] == ["stop", "range", "close",
                                                           "target"]
-    # The buy range's bar geometry arrives ready to place, with no page maths.
-    assert band["range_left_percent"] == band["markers"][1]["percent"]
-    assert float(band["range_width_percent"]) > 0
-    assert all(marker["percent"] == f"{marker['position']:.2f}"
-               for marker in band["markers"])
+    # The buy range's bar geometry arrives as 0-1 fractions for the CSS calc()
+    # that mirrors the axis inset; the page does no arithmetic.
+    assert band["range_left_fraction"] == band["markers"][1]["fraction"]
+    assert band["range_width_fraction"] > 0
+    by_key = {marker["key"]: marker for marker in band["markers"]}
+    assert abs(band["range_width_fraction"]
+               - (by_key["entry_high"]["fraction"]
+                  - by_key["entry_low"]["fraction"])) < 0.01
+    assert all(0.0 <= marker["fraction"] <= 1.0 for marker in band["markers"])
     # The closing price is distinguishable by shape, not only by colour.
     shapes = {marker["key"]: marker["shape"] for marker in band["markers"]}
     assert shapes["creation_price"] == "close"
@@ -335,3 +339,47 @@ def test_band_labels_never_overlap_on_the_same_side():
         for left, right in occupied.get(key, []):
             assert span[0] > right or span[1] < left, (marker, key)
         occupied.setdefault(key, []).append(span)
+
+
+def test_the_plot_is_deep_enough_for_both_sides_of_labels():
+    """Every label row must fit inside the plot, or it spills onto the legend."""
+    from thesis_tracker.webapp.service import BAND_BLOCK_PX, BAND_TICK_PX, price_band
+
+    card = {"action": "分批", "entry_range": [327.0, 335.0], "stop_loss": 320.0,
+            "target_price": 345.34, "creation_price": 333.69}
+    band = price_band(card)
+    # The axis sits at the half-depth line, and each side has that much room, so
+    # even the deepest label row stays inside the plot.
+    assert band["axis_from_top_px"] == band["plot_height_px"] // 2
+    for marker in band["markers"]:
+        needed = BAND_TICK_PX + BAND_BLOCK_PX + marker["label_offset_px"]
+        assert needed <= band["axis_from_top_px"], (marker, needed)
+
+
+def test_the_end_markers_label_stays_inside_the_plot():
+    """A marker at 0% or 100% must still have room for its whole label.
+
+    The inset is derived per card from the widest label present, so a longer
+    price string widens the inset instead of pushing the label off the edge.
+    """
+    from thesis_tracker.webapp.service import (
+        BAND_COLUMN_PX,
+        band_inset_px,
+        label_width_px,
+        price_band,
+    )
+
+    card = {"action": "分批", "entry_range": [327.0, 335.0], "stop_loss": 320.0,
+            "target_price": 345.34, "creation_price": 333.69}
+    band = price_band(card)
+    inset = band["inset_px"]
+    assert inset == round(band_inset_px(band["markers"]), 2)
+    assert inset >= max(label_width_px(marker)
+                        for marker in band["markers"]) / 2
+    # Placing the extreme markers with that inset keeps their boxes on the axis.
+    axis = BAND_COLUMN_PX - 2 * inset
+    for marker in band["markers"]:
+        centre = inset + marker["fraction"] * axis
+        half = label_width_px(marker) / 2
+        assert centre - half >= -0.01, marker
+        assert centre + half <= BAND_COLUMN_PX + 0.01, marker
