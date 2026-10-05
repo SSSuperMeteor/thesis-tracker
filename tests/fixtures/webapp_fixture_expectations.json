@@ -1,0 +1,49 @@
+{
+  "amendment": {
+    "accession": "0001045810-26-000090",
+    "form": "10-K/A",
+    "original_accession": "0001045810-26-000004",
+    "period_end": "2026-01-25"
+  },
+  "as_of": "2026-09-07",
+  "collision_quarter": "2026Q1",
+  "metric_envelopes": {
+    "AAPL": {
+      "data_end_date": "2026-07-31",
+      "status": "ok",
+      "values": {
+        "accruals_ratio": "-0.01214293668174370449712864620",
+        "ar_growth_vs_rev_growth": "-0.0241811950306125604060226750",
+        "cash_conversion": "1.153748027795494981368961697",
+        "diluted_share_count_yoy": "-0.01562083247732048164528936936",
+        "gross_margin_trend": "0.5005620698794520047159033788",
+        "net_debt_to_ebitda": "1.095886197616301422529796232"
+      }
+    },
+    "MSFT": {
+      "data_end_date": "2026-07-28",
+      "status": "unavailable",
+      "values": {}
+    },
+    "NVDA": {
+      "data_end_date": "2026-08-26",
+      "status": "unavailable",
+      "values": {}
+    }
+  },
+  "prices": {
+    "AAPL": {
+      "end": "2026-09-07",
+      "latest_close": 249.9,
+      "rows": 700,
+      "start": "2024-01-02"
+    },
+    "MSFT": null,
+    "NVDA": {
+      "end": "2026-03-20",
+      "latest_close": 149.9,
+      "rows": 100,
+      "start": "2025-11-03"
+    }
+  }
+}

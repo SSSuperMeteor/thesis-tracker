@@ -19,6 +19,10 @@ from thesis_tracker.prices import get_price_history
 
 DISCLAIMER = "本卡为 AI 研究输出，不构成持牌投资建议。"
 VALIDATOR_VERSION = "decision-validator-3"
+# D03: the newest stored price must be within this many calendar days of as_of.
+# The local web app reads this same constant to flag stale prices, so the banner
+# and the validator can never disagree about what "stale" means.
+PRICE_STALENESS_DAYS = 5
 # Rules added after a given archived validator version.  Replaying an old card
 # with its own version skips exactly these; D11 is a pure text rule with no
 # schema dependency and stays version-independent.
@@ -286,8 +290,9 @@ def validate_card(card: dict, snapshot: dict, *,
         if call.get("tool") == "get_price_history" and call.get("args", {}).get("symbol") == ticker:
             if envelope.get("status") != "ok" or not end or not (envelope.get("data") or {}).get("latest_close"):
                 add("D03", f"snapshot.calls[{i}]", "价格数据不可用。")
-            elif age is not None and age > 5:
-                add("D03", f"snapshot.calls[{i}].data_end_date", "价格数据距分析截至日超过 5 个日历日。")
+            elif age is not None and age > PRICE_STALENESS_DAYS:
+                add("D03", f"snapshot.calls[{i}].data_end_date",
+                    f"价格数据距分析截至日超过 {PRICE_STALENESS_DAYS} 个日历日。")
     prices = [call for call in snapshot.get("calls", []) if call.get("tool") == "get_price_history"
               and call.get("args", {}).get("symbol") == ticker]
     if not prices:
