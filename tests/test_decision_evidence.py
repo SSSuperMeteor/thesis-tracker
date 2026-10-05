@@ -134,7 +134,7 @@ def test_card_render_uses_same_display_rule_as_model_evidence():
     price = snapshot["calls"][0]["envelope"]["fact_id"]
     draft = {"ticker": "AAPL", "as_of": "2026-10-04", "horizon": "中期",
              "bias": "看多", "action": "买入", "confidence": "中",
-             "entry_range": [300, 320], "stop_loss": 290, "target_price": 400,
+             "entry_range": [324, 334], "stop_loss": 290, "target_price": 400,
              "fact_ids": [price, rsi["fact_id"]],
              "reasons": [{"text": "RSI {fact:" + rsi["fact_id"] + "}",
                           "fact_ids": [rsi["fact_id"]]}],

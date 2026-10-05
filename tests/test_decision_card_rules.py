@@ -50,7 +50,7 @@ def draft(snapshot, **overrides):
     high = fact_id(snapshot, "high_52w")
     base = {
         "ticker": TICKER, "as_of": AS_OF, "horizon": "中期", "bias": "看多",
-        "action": "买入", "confidence": "中", "entry_range": [300, 320],
+        "action": "买入", "confidence": "中", "entry_range": [324, 334],
         "stop_loss": 290, "target_price": 400, "fact_ids": [close, rsi, sma, high],
         "reasons": [{"text": "收盘价 {fact:" + close + "}，RSI {fact:" + rsi + "}。",
                      "fact_ids": [close, rsi]}],

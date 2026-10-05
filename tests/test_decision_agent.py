@@ -53,7 +53,7 @@ def legal_draft():
     price = snapshot["calls"][0]["envelope"]["fact_id"]
     indicator = snapshot["calls"][1]["envelope"]["data"]["latest"]["values"]["rsi_14"]["fact_id"]
     return {"ticker": "AAPL", "as_of": "2026-10-04", "horizon": "中期", "bias": "看多",
-            "action": "买入", "confidence": "中", "entry_range": [300, 320],
+            "action": "买入", "confidence": "中", "entry_range": [324, 334],
             "stop_loss": 290, "target_price": 400, "fact_ids": [price, indicator],
             "reasons": [{"text": "收盘价 {fact:" + price + "}，RSI {fact:" + indicator + "}。",
                          "fact_ids": [price, indicator]}],

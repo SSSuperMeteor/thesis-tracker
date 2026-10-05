@@ -7,7 +7,7 @@ import socket
 
 import pytest
 
-from thesis_tracker.decision.agent import run_analysis
+from thesis_tracker.decision.agent import SYSTEM_PROMPT, run_analysis, system_prompt
 from thesis_tracker.decision.analyze_cli import main as analyze_main
 from thesis_tracker.decision.core import capture_snapshot
 from thesis_tracker.decision.evidence import (
@@ -27,6 +27,14 @@ def offline(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", denied)
     monkeypatch.setattr(socket.socket, "connect_ex", denied)
+
+
+def test_system_prompt_states_the_requested_horizon():
+    assert "__HORIZON__" in SYSTEM_PROMPT
+    for label in ("短期", "中期", "长期"):
+        text = system_prompt(label)
+        assert "__HORIZON__" not in text
+        assert f"「{label}」" in text
 
 
 def test_horizon_to_tier_mapping_is_fixed():
@@ -82,7 +90,7 @@ def legal_draft(horizon):
     snapshot = capture_snapshot(TICKER, AS_OF)
     close = snapshot["calls"][0]["envelope"]["fact_id"]
     return {"ticker": TICKER, "as_of": AS_OF, "horizon": horizon, "bias": "看多",
-            "action": "买入", "confidence": "中", "entry_range": [300, 320],
+            "action": "买入", "confidence": "中", "entry_range": [324, 334],
             "stop_loss": 290, "target_price": 400, "fact_ids": [close],
             "reasons": [{"text": "收盘价 {fact:" + close + "}", "fact_ids": [close]}],
             "invalidations": [{"kind": "close_below", "price": 290, "text": "跌破止损位"}],

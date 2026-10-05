@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -32,10 +33,33 @@ METRIC_LABELS = {
     "net_buyback_yield": "净回购收益率",
     "volume_ratio_20": "成交量比",
     "rsi_14": "RSI",
+    "close": "收盘价",
+    "adjusted_close": "复权收盘价",
+    "macd_line": "MACD线",
+    "macd_signal": "MACD信号线",
+    "macd_histogram": "MACD柱",
+    "bollinger_upper_20": "布林上轨(20日)",
+    "bollinger_middle_20": "布林中轨(20日)",
+    "bollinger_lower_20": "布林下轨(20日)",
+    "atr_14": "ATR(14日平均波动幅度)",
+    "position_52w": "52周区间位置",
+    "high_52w": "52周最高价",
+    "low_52w": "52周最低价",
 }
+# Families whose display is a scaled percentage, a multiple, or a rate difference.
 PERCENT_METRICS = frozenset({"gross_margin_trend", "accruals_ratio", "diluted_share_count_yoy"})
 MULTIPLE_METRICS = frozenset({"cash_conversion", "net_debt_to_ebitda",
                               "interest_coverage", "volume_ratio_20"})
+# ar_growth_vs_rev_growth = accounts_receivable_yoy - revenue_yoy: a difference of
+# two growth rates, so it is shown in percentage points (see
+# metrics.financial.compute_ar_growth_vs_rev_growth and the formula string).
+POINTS_METRICS = frozenset({"ar_growth_vs_rev_growth"})
+# SEC-XBRL derived fundamentals, whose labels carry a fiscal period.
+FUNDAMENTAL_METRICS = frozenset({
+    "accruals_ratio", "ar_growth_vs_rev_growth", "cash_conversion",
+    "diluted_share_count_yoy", "gross_margin_trend", "interest_coverage",
+    "net_buyback_yield", "net_debt_to_ebitda",
+})
 UNIT_LABELS = {
     "USD/share": "美元/股",
     "USD": "美元",
@@ -45,6 +69,58 @@ UNIT_LABELS = {
     "index (0-100)": "",
     "ratio": "",
 }
+# Pattern labels for the indicator and derived-fact families.
+_LABEL_PATTERNS = (
+    (re.compile(r"^sma_(\d+)$"), "{}日均线"),
+    (re.compile(r"^ema_(\d+)$"), "{}日指数均线"),
+    (re.compile(r"^range_high_(\d+)$"), "近{}日最高价"),
+    (re.compile(r"^range_low_(\d+)$"), "近{}日最低价"),
+    (re.compile(r"^distance_to_high_(\d+)_percent$"), "距{}日高点"),
+    (re.compile(r"^distance_to_low_(\d+)_percent$"), "距{}日低点"),
+    (re.compile(r"^relative_spy_(\d+)$"), "相对SPY超额({}日)"),
+    (re.compile(r"^return_(\d+)m$"), "近{}月回报"),
+    (re.compile(r"^return_(\d+)y$"), "近{}年回报"),
+    (re.compile(r"^high_(\d+)y$"), "{}年最高价"),
+    (re.compile(r"^low_(\d+)y$"), "{}年最低价"),
+    (re.compile(r"^avg_volume_(\d+)$"), "{}日均量"),
+)
+
+
+def metric_label(name: str) -> str:
+    """Chinese label for a fact name; unknown names fall back to the raw name."""
+    if name in METRIC_LABELS:
+        return METRIC_LABELS[name]
+    for pattern, template in _LABEL_PATTERNS:
+        match = pattern.match(name)
+        if match is not None:
+            return template.format(*match.groups())
+    return name
+
+
+def metric_category(name: str) -> str:
+    """Name-only fallback category when a fact carries no source metadata."""
+    return "fundamental" if name in FUNDAMENTAL_METRICS else "market"
+
+
+def fact_category(fact: dict) -> str:
+    """'fundamental' | 'market' | 'derived', from the fact's own metadata first."""
+    source = fact.get("source")
+    if isinstance(source, dict):
+        declared = source.get("category") or source.get("kind") or source.get("type")
+        if declared in {"fundamental", "market", "derived"}:
+            return declared
+        if source.get("provider") == "sec_filing_xbrl":
+            return "fundamental"
+        if source.get("provider") == "tiingo":
+            return "market"
+        if "formula" in source or "source_fact_ids" in source:
+            return "derived"
+    fact_id = str(fact.get("fact_id") or "")
+    if fact_id.startswith("sec_metric|"):
+        return "fundamental"
+    if fact_id.startswith("derived|"):
+        return "derived"
+    return "market"
 
 # The only fields each history-capable tool actually serves.  The model-facing
 # tool schema, the catalog text and ``history_view`` all read this mapping, so
@@ -69,7 +145,7 @@ def display_value(value: object, unit: str, *, name: str | None = None) -> str |
     if value is None:
         return None
     number = Decimal(str(value))
-    if name in PERCENT_METRICS:
+    if name in PERCENT_METRICS or name in POINTS_METRICS:
         number *= 100
     places = _decimal_places(unit, name)
     quantized = number.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
@@ -77,7 +153,7 @@ def display_value(value: object, unit: str, *, name: str | None = None) -> str |
 
 
 def _decimal_places(unit: str, name: str | None) -> int:
-    if name in PERCENT_METRICS or name in MULTIPLE_METRICS:
+    if name in PERCENT_METRICS or name in MULTIPLE_METRICS or name in POINTS_METRICS:
         return 2
     if unit == "index (0-100)":
         return 1
@@ -99,6 +175,8 @@ def display_text(value: object, unit: str, *, name: str | None = None) -> str | 
         return None
     if name in PERCENT_METRICS:
         return f"{text}%"
+    if name in POINTS_METRICS:
+        return f"{text} 个百分点"
     if name in MULTIPLE_METRICS:
         return f"{text} 倍"
     label = UNIT_LABELS.get(unit, unit)
@@ -110,11 +188,17 @@ def display_text(value: object, unit: str, *, name: str | None = None) -> str | 
 
 
 def display_label(name: str, date_or_period: str | None = None, *,
-                  multiple: bool = False) -> str:
-    """Chinese metric label; unknown names fall back to the raw name."""
-    label = METRIC_LABELS.get(name, name)
+                  multiple: bool = False, category: str | None = None) -> str:
+    """Chinese metric label, with a period suffix when one name spans periods.
+
+    SEC fundamentals get 财期截止; price and indicator facts get 日期.  Unknown
+    names still fall back to the raw name.
+    """
+    label = metric_label(name)
     if multiple and date_or_period:
-        return f"{label}（财期截止 {date_or_period}）"
+        kind = category or metric_category(name)
+        suffix = "财期截止" if kind == "fundamental" else "日期"
+        return f"{label}（{suffix} {date_or_period}）"
     return label
 
 

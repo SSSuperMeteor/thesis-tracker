@@ -34,7 +34,7 @@ from thesis_tracker.indicator_tool import get_indicators
 from thesis_tracker.prices import get_price_history
 
 MODEL = "deepseek-flash"
-PROMPT_VERSION = "decision-agent-v4-horizon-rules-2026-10-04"
+PROMPT_VERSION = "decision-agent-v5-entry-stop-rules-2026-10-04"
 MAX_TOOL_CALLS = 12
 MAX_ROUNDS = 16
 MAX_TOTAL_TOKENS = 1_500_000
@@ -50,22 +50,28 @@ SYSTEM_PROMPT = """你是 Decision Mode 研究判断模型。只使用基础包�
 你的立场必须明确：给出看多/中性/看空、买入/分批/持有/减仓/回避/观望、具体买点、止损和目标。
 观望、减仓或回避时买点、止损、目标填 null，stop_rationale 与 target_rationale 留空，
 但仍要给出收盘价突破或跌破的失效阈值。中性倾向才可以使用“观望”。
-本次分析周期由命令行固定，horizon 必须回填与之对应的中文档位（短期/中期/长期），不要自行更改。
+本次分析周期由命令行固定为「__HORIZON__」，horizon 字段必须等于这个中文档位，不要自行更改。
 事实数值只能来自工具。JSON 草稿只列 fact_id，不写事实表、数据缺口或免责声明；
 Python 会按 fact_id 填值。理由和失效条件文字引用事实数字只能写 {fact:<完整 fact_id>}。
-除 YYYY-MM-DD 日期、Q1-Q4/2026-Q3 财期及“3 个季度”类时间计数外，文字不写裸数字。
+除 YYYY-MM-DD 日期、Q1-Q4/2026-Q3 财期及“3 个季度”类时间计数外，文字不写裸数字；
+“200 日线”“63 日”这类窗口天数也属于裸数字，必须写成对应的 fact 占位符。
+反例（会被拒绝）：“收盘价 333.69 美元/股”；正例（会被接受）：“收盘价 {fact:tiingo|AAPL|2026-10-02|daily}”。
 每条理由至少列一个 fact_id。必须有 kind=close_below 或 close_above 且 price>0 的失效条件。
 理由正文的动作词必须与 action 一致：action 为买入时理由里不写“分批/加仓”，为持有时不写“买入/减仓”，
 以此类推；条件式动作只写在失效条件文字里（例如“跌破则转为回避”“突破可上调为分批买入”）。
 买入、分批、持有必须填写 stop_rationale 和 target_rationale，各写一句依据并至少引用一个 fact_id；
 这两个字段与理由适用同一条裸数字规则。
+买入或分批时，截至日最新收盘价必须落在买点区间内；现价在区间外时应改为“观望”，
+并在理由和失效条件里写出等待的价位条件。止损位必须等于第一条 close_below 失效条件的阈值；
+失效条件的文字只是对这条机器条件的说明，不要在说明里另写触发价位。
 趋势性描述（例如“转负”“放量”“持续”“走高”）只有在引用了对应历史档位的事实后才可写，否则不要写。
 按周期侧重：短期以近三个月价格、ATR 倍数止损和相对强弱为主；中期兼顾价格与财务质量；
 长期以财务质量、三到五年位置为主；买点给区间。
 不要隐瞒 unavailable、not_applicable 或 null；Python 自动把它们写进数据缺口。
 工具 as_of 由程序固定，永远不要在工具参数中传 as_of。可调用目标股票与 SPY（SPY 仅可用于默认最新页；分档历史只支持目标标的）。
 基础包已提供最新值、关键地标和本次周期的默认历史档位；可按需请求其他档位，只引用所见 fact_id。
-只输出一个 JSON 对象，不要 markdown。schema 示例：
+只输出一个 JSON 对象，不要 markdown，必须完整闭合（最后一个字符是 }）；
+fact_ids 只列理由与依据里真正引用的编号，不要堆积长列表，避免在未闭合的字符串处被截断。schema 示例：
 {"ticker":"目标标的","as_of":"分析日期","horizon":"中期","bias":"看多",
 "action":"买入","confidence":"中","entry_range":[300,320],"stop_loss":null,
 "target_price":null,"stop_rationale":"跌破 {fact:真实编号} 离场","target_rationale":"上看 {fact:真实编号}",
@@ -91,6 +97,11 @@ def _tool_schema(name: str, description: str, *, history: bool = True) -> dict:
     return {"type": "function", "function": {"name": name, "description": description,
             "parameters": {"type": "object", "additionalProperties": False,
                            "properties": properties, "required": ["ticker"]}}}
+
+
+def system_prompt(horizon_label: str) -> str:
+    """Fill the requested horizon into the system prompt (D13)."""
+    return SYSTEM_PROMPT.replace("__HORIZON__", horizon_label)
 
 
 TOOL_SCHEMAS = [
@@ -365,7 +376,7 @@ def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
     date.fromisoformat(as_of)
     analysis_id = str(uuid.uuid4())
     snapshot, base, catalog = prepare_evidence(ticker, as_of, horizon=horizon)
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT},
+    messages: list[dict] = [{"role": "system", "content": system_prompt(HORIZON_LABELS[horizon])},
                             {"role": "user", "content": json.dumps({"task": f"分析 {ticker}，as_of={as_of}。按需取历史，然后输出 JSON 建议卡。",
                                 "base_pack": base, "catalog": catalog}, ensure_ascii=False)}]
     stats = {"rounds": 0, "tool_calls": 0, "revisions": 0, "input_tokens": 0,

@@ -200,7 +200,7 @@ def _legal_draft() -> dict:
     snap = capture_snapshot(TICKER, AS_OF)
     price = snap["calls"][0]["envelope"]["fact_id"]
     return {"ticker": TICKER, "as_of": AS_OF, "horizon": "中期", "bias": "看多",
-            "action": "买入", "confidence": "中", "entry_range": [300, 320],
+            "action": "买入", "confidence": "中", "entry_range": [324, 334],
             "stop_loss": 290, "target_price": 400, "fact_ids": [price],
             "reasons": [{"text": "收盘价 {fact:" + price + "}", "fact_ids": [price]}],
             "invalidations": [{"kind": "close_below", "price": 290, "text": "跌破止损位"}],
