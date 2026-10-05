@@ -20,7 +20,8 @@ def fixture(tmp_path):
 def detail(fixture):
     from thesis_tracker.webapp.service import card_detail
 
-    return card_detail(card_db=fixture.card_db, card_id=fixture.card_id)
+    return card_detail(card_db=fixture.card_db, card_id=fixture.card_id,
+                       price_db=fixture.price_db)
 
 
 def shortened_ok(short, full):
@@ -394,3 +395,40 @@ def test_each_invalidation_line_says_what_it_is(detail):
         machine = "".join(segment["value"] for segment in item["machine_check"])
         assert machine.startswith("收盘价")
         assert item["explanation"], "the explanation is kept, just labelled"
+
+
+def test_the_card_chart_draws_the_cards_own_levels_and_close(detail):
+    chart = detail["chart"]
+    assert chart["available"] is True
+    levels = {level["key"]: level for level in chart["ranges"][1]["levels"]}
+    assert set(levels) == {"entry", "stop", "target"}
+    assert levels["stop"]["value"] == detail["stop_loss"]
+    assert levels["target"]["value"] == detail["target_price"]
+    assert levels["entry"]["value"].startswith(detail["entry_range"][0].split(" ")[0])
+    marker = chart["ranges"][1]["close_marker"]
+    assert marker["label"] == f"收盘价 {detail['creation_price']}"
+
+
+@pytest.mark.parametrize("action, drawn", [("买入", True), ("分批", True), ("持有", True),
+                                           ("观望", False), ("减仓", False),
+                                           ("回避", False)])
+def test_only_the_priced_actions_draw_levels(action, drawn):
+    from thesis_tracker.webapp.service import chart_inputs
+
+    card = {"action": action, "entry_range": [228, 236], "stop_loss": 218.12,
+            "target_price": 265, "creation_price": 233.95, "as_of": "2026-09-07"}
+    levels, note, _close, _day = chart_inputs(card)
+    if drawn:
+        assert levels is not None and note is None
+    else:
+        assert levels is None
+        assert "没有价位" in note
+
+
+def test_a_holding_card_has_no_entry_band():
+    from thesis_tracker.webapp.service import chart_inputs
+
+    card = {"action": "持有", "entry_range": None, "stop_loss": 200, "target_price": 260,
+            "creation_price": 233.95, "as_of": "2026-09-07"}
+    levels, _note, _close, _day = chart_inputs(card)
+    assert levels["entry"] is None and levels["stop"] == 200

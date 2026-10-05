@@ -64,6 +64,8 @@ GET_FORBIDDEN_PATHS = frozenset({"/api/analyze", "/api/conversations/archive",
 COOKIE_NAME = "dsh_token"
 ALLOWED_HOSTS = ("127.0.0.1", "localhost")
 MAX_BODY_BYTES = 64 * 1024
+# How much of a refused body is read and discarded before the 413 is sent.
+MAX_DRAIN_BYTES = 8 * 1024 * 1024
 # No external resource may ever load: every fetch falls back to default-src
 # 'self'.  The one relaxation is inline *style* attributes, which the price band
 # needs to place backend-computed markers; scripts stay locked to 'self', so
@@ -215,12 +217,24 @@ class _Handler(BaseHTTPRequestHandler):
             supplied = self.headers.get("X-DSH-Token")
         return supplied is not None and secrets.compare_digest(supplied, app.token)
 
+    def _discard(self, remaining: int) -> None:
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 64 * 1024))
+            if not chunk:
+                return
+            remaining -= len(chunk)
+
     def _read_json_body(self):
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             return None, (400, {"error": "Content-Length 无效。"})
         if length > MAX_BODY_BYTES:
+            # Read (and throw away) what the client is still sending, up to a cap:
+            # closing a socket that holds unread data resets the connection, and
+            # the client would see a network error instead of this 413.
+            self._discard(min(length, MAX_DRAIN_BYTES))
+            self.close_connection = True
             return None, (413, {"error": "请求体超过上限。"})
         raw = self.rfile.read(length) if length else b""
         if not raw:
@@ -249,6 +263,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(200, service.overview(
                     fact_db=app.fact_db, price_db=app.price_db, card_db=app.card_db,
                     reference_date=reference))
+                return
+            if path == "/api/price-status":
+                self._json(200, service.price_status(
+                    fact_db=app.fact_db, price_db=app.price_db, reference_date=reference))
                 return
             if path == "/api/companies":
                 self._json(200, {"tickers": _known_tickers(app)})
@@ -279,7 +297,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if path.startswith("/api/cards/"):
                 card_id = unquote(path[len("/api/cards/"):])
-                self._json(200, service.card_detail(card_db=app.card_db, card_id=card_id))
+                self._json(200, service.card_detail(card_db=app.card_db, card_id=card_id,
+                                                    price_db=app.price_db))
                 return
             if path == "/api/usage":
                 self._json(200, service.usage_average(app.card_db))

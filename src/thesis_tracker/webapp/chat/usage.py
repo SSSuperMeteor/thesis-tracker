@@ -20,8 +20,10 @@ from pathlib import Path
 
 from thesis_tracker.webapp import display
 from thesis_tracker.webapp.chat.pricing import (
+    MISSING_PRICING_NOTE,
     Pricing,
     cost_label,
+    format_cost,
     load_pricing,
     price_note,
 )
@@ -54,6 +56,22 @@ def _level(raw: dict, *, pricing: Pricing | None, label: str) -> dict:
             "cost_text": cost_label(amount, pricing)}
 
 
+def summary_line(levels: dict) -> str:
+    """One quiet sentence: this conversation and today, tokens and (if priced) money."""
+    priced = False
+    parts = []
+    for key in ("conversation", "today"):
+        level = levels[key]
+        text = (f"{level['scope']} 输入 {level['input_tokens']:,} "
+                f"输出 {level['output_tokens']:,} token")
+        if level["cost_usd"] is not None:
+            priced = True
+            text += f"，{format_cost(level['cost_usd'])}"
+        parts.append(text)
+    note = "（费用按高峰价上界估算）" if priced else f"（{MISSING_PRICING_NOTE}）"
+    return "｜".join(parts) + note
+
+
 def usage_summary(store, *, conversation_id: str, message_id: str | None = None,
                   ticker: str | None = None, pricing_path: Path | str | None = None,
                   now: datetime | None = None) -> dict:
@@ -75,7 +93,8 @@ def usage_summary(store, *, conversation_id: str, message_id: str | None = None,
         "today": _level(store.usage_since(start_of_local_day(now)), pricing=pricing,
                         label=labels["today"]),
     }
-    return {"levels": levels, "pricing_available": pricing is not None,
+    return {"levels": levels, "summary_line": summary_line(levels),
+            "pricing_available": pricing is not None,
             "price_note": price_note(pricing),
             "price_as_of": None if pricing is None else pricing.as_of_date,
             "price_source_url": None if pricing is None else pricing.source_url,

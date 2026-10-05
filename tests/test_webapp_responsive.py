@@ -70,18 +70,28 @@ def test_sticky_positions_are_used_only_where_the_design_calls_for_them():
     and the copy-confirmation toast (the one element that follows the viewport)."""
     sticky = set(re.findall(r"^([^{}]+?)\s*\{[^}]*position:\s*sticky", CSS, re.S | re.M))
     normalised = {selector.strip().split("\n")[-1].strip() for selector in sticky}
-    # Five: the sticky coverage header, the company column, the three pinned
-    # summary columns, the evidence panel, and the toast.  The toast is sticky
-    # rather than fixed on purpose (see test_nothing_is_positioned_against_the_
-    # viewport): it needs the viewport's bottom edge and nothing else.
-    assert len(sticky) == 5, sticky
-    assert ".toast" in normalised
+    # Seven: the sticky coverage header, the company column, the pinned summary
+    # columns, the evidence panel, the toast, the sidebar and the chat composer.
+    # The toast, the sidebar and the composer are sticky rather than fixed on
+    # purpose (see test_nothing_is_positioned_against_the_viewport): each needs
+    # the viewport's edge and nothing else.
+    assert len(sticky) == 7, sticky
+    assert {".toast", ".sidebar", ".composer-dock"} <= normalised
     assert any("thead th" in selector for selector in normalised)
     assert ".stick" in normalised and ".tail" in normalised and ".evidence" in normalised
-    # The pinned summary columns are offset by their neighbours' widths.
-    assert "right: 0" in CSS
-    assert ":nth-last-child(2)" in CSS and "right: 53px" in CSS
-    assert ":nth-last-child(3)" in CSS and "right: 168px" in CSS
+    # The pinned summary columns are border-box, so each one's offset is exactly
+    # the sum of the widths to its right: 68, 68+108, 176+208, 384+112, 496.
+    for column, right in ((".t-cards", 0), (".t-date", 68), (".t-range", 176),
+                          (".t-spark", 384), (".t-price", 496)):
+        rule = re.search(rf"\.tail\{column}\s*\{{([^}}]*)\}}", CSS)
+        assert rule is not None, column
+        expected = "right: 0;" if right == 0 else f"right: {right}px"
+        assert expected in rule.group(1), (column, right)
+    widths = {column: int(re.search(rf"\.tail\{column}\s*\{{[^}}]*?\bwidth: (\d+)px", CSS).group(1))
+              for column in (".t-cards", ".t-date", ".t-range", ".t-spark")}
+    assert widths[".t-date"] + 68 == 176 and widths[".t-cards"] == 68
+    assert 176 + widths[".t-range"] == 384
+    assert 384 + widths[".t-spark"] == 496
 
 
 def test_nothing_is_positioned_against_the_viewport():

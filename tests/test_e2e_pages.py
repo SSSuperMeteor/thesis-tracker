@@ -56,9 +56,21 @@ def test_the_overview_lists_every_company_and_leaks_nothing(checks):
     assert checks["overview_overflow_1440"] == 0
 
 
-def test_the_stale_price_notice_gives_the_command_and_confirms_the_copy(checks):
+def test_the_price_state_is_a_sidebar_pill_that_opens_onto_the_command(checks):
+    assert "过期" in checks["pill_text"]
+    assert checks["pill_collapsed_at_first"] is True
+    assert checks["pill_expanded_after_click"] is True
     assert checks["price_command_visible"] is True
     assert checks["copy_command_feedback"] is True
+    assert checks["no_banner_in_the_page"] is True
+
+
+def test_the_overview_is_a_matrix_of_blocks_with_a_sparkline_per_priced_company(checks):
+    assert checks["matrix_blocks"] >= 10
+    assert checks["matrix_has_a_10k_block"] is True
+    assert checks["matrix_sparklines"] == 2          # AAPL and NVDA; MSFT has no prices
+    assert checks["matrix_current_column"] is True
+    assert checks["hover_lights_a_column"] is True
 
 
 def test_the_narrow_overview_shows_filings_instead_of_a_blank_pane(checks):
@@ -71,6 +83,15 @@ def test_the_narrow_overview_shows_filings_instead_of_a_blank_pane(checks):
 def test_every_company_branch_opens_cleanly(checks, tag, title):
     assert checks[f"company_{tag}_title"] == title
     assert checks[f"company_{tag}_leaks"] == []
+
+
+def test_the_company_page_has_a_chart_a_timeline_metric_blocks_and_card_tiles(checks):
+    assert checks["company_chart_present"] == 1
+    assert checks["company_chart_ranges"] == 3
+    assert checks["company_timeline_blocks"] is True
+    assert checks["company_metric_blocks"] == 8
+    assert checks["company_card_tiles"] == 1
+    assert checks["noprice_chart_is_a_sentence"] is True
 
 
 def test_the_company_without_prices_says_so(checks):
@@ -92,6 +113,25 @@ def test_a_fact_marker_on_a_card_leads_to_its_evidence_row(checks):
     assert checks["card_has_disclaimer"] is True
     assert checks["card_leaks"] == []
     assert checks["card_problems"] == 0
+
+
+def test_the_card_page_leads_with_a_verdict_and_four_metric_blocks_over_one_chart(checks):
+    assert checks["card_verdict_badges"] == 2
+    assert checks["card_metric_blocks"] == 4
+    assert checks["card_chart_levels"] >= 3          # entry, stop, target (and the close)
+    assert checks["card_has_no_second_band"] is True
+
+
+def test_the_chart_switches_range_and_answers_to_the_pointer_and_the_keyboard(checks):
+    assert checks["range_switch_pressed"] is True
+    assert checks["keyboard_shows_tooltip"] == 1
+    assert "复权收盘价" in checks["tooltip_text"] and "美元/股" in checks["tooltip_text"]
+    assert checks["hover_shows_crosshair"] == 1
+
+
+def test_a_card_can_be_followed_up_and_the_conversation_is_pinned_to_it(checks):
+    assert checks["follow_up_opens_a_chat"] is True
+    assert checks["follow_up_is_pinned"] is True
 
 
 def test_the_job_list_shows_a_chat_turn_without_internal_identifiers(checks):

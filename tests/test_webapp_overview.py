@@ -289,9 +289,15 @@ def test_nothing_is_marked_after_a_companys_newest_filing(tmp_path):
         assert all(key <= newest for key in company["dashed_quarters"])
         first = min(company["periods"])
         assert all(key >= first for key in company["dashed_quarters"])
-    # The axis itself does not extend past the newest period any company reports.
-    assert built["quarters"][-1] <= max(
-        key for item in built["companies"].values() for key in item["periods"])
+    # The axis does not extend past the newest period any company reports, except
+    # to the quarter the reader is in: that column is blank and marks "now".
+    newest_reported = max(key for item in built["companies"].values()
+                          for key in item["periods"])
+    assert built["quarters"][-1] in {newest_reported, built["current_quarter"]}
+    if built["quarters"][-1] != newest_reported:
+        assert built["quarters"][-1] == built["current_quarter"]
+        assert all(built["quarters"][-1] not in item["periods"]
+                   for item in built["companies"].values())
 
 
 def test_the_dashed_box_legend_says_what_it_means(fixture):
@@ -355,3 +361,36 @@ def test_a_real_hole_is_still_marked_when_the_older_cell_holds_two_filings():
     mark_empty_cells(company, quarter_range("2025Q1", "2025Q3"))
     # 2025-03-28 -> 2025-09-30 is 186 days, so the quarter between them is a hole.
     assert company["dashed_quarters"] == ["2025Q2"]
+
+
+def test_the_current_calendar_quarter_is_named_and_always_a_column(fixture):
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    built = build_overview(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                           card_db=fixture.card_db, reference_date="2026-09-07")
+    assert built["current_quarter"] == "2026Q3"
+    assert "2026Q3" in built["quarters"]
+
+
+def test_a_current_quarter_nobody_has_reported_yet_is_an_empty_column_not_a_hole(fixture):
+    """Reference day in 2026Q4, newest filings in 2026Q3: one blank column is added."""
+    from thesis_tracker.webapp.service import overview as build_overview
+
+    built = build_overview(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                           card_db=fixture.card_db, reference_date="2026-10-05")
+    assert built["current_quarter"] == "2026Q4"
+    assert built["quarters"][-1] == "2026Q4"
+    assert built["quarters"][-2] == "2026Q3"
+    for company in built["companies"].values():
+        assert "2026Q4" not in company["periods"]
+        # Blank, never dashed: a quarter that has not been reported yet is not a hole.
+        assert "2026Q4" not in company["dashed_quarters"]
+
+
+def test_every_company_with_prices_has_a_sparkline_and_the_one_without_does_not(overview):
+    for ticker in ("AAPL", "NVDA"):
+        spark = overview["companies"][ticker]["spark"]
+        assert spark["available"] is True
+        assert spark["path"].startswith("M")
+        assert spark["end"]["x"] == "100.00"
+    assert overview["companies"]["MSFT"]["spark"]["available"] is False

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <!-- Linear 20x20 icons drawn in currentColor, plus the brand mark.  Referenced
+       with <use href="/sprite.svg#i-name">; colours and strokes are inherited from
+       the element that uses them. -->
+  <symbol id="i-overview" viewBox="0 0 20 20"><rect x="3" y="3" width="6" height="6" rx="1.5"></rect><rect x="11" y="3" width="6" height="6" rx="1.5"></rect><rect x="3" y="11" width="6" height="6" rx="1.5"></rect><rect x="11" y="11" width="6" height="6" rx="1.5"></rect></symbol>
+  <symbol id="i-cards" viewBox="0 0 20 20"><path d="M5 2.5h7l3.5 3.5v11a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-13.5a1 1 0 0 1 1-1z"></path><path d="M12 2.5v3.5h3.5"></path><path d="M7 10h6M7 13h6"></path></symbol>
+  <symbol id="i-jobs" viewBox="0 0 20 20"><path d="M7 5.5h9M7 10h9M7 14.5h9"></path><circle cx="3.8" cy="5.5" r=".9"></circle><circle cx="3.8" cy="10" r=".9"></circle><circle cx="3.8" cy="14.5" r=".9"></circle></symbol>
+  <symbol id="i-chat" viewBox="0 0 20 20"><path d="M4 4h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H9l-4 3v-3H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"></path></symbol>
+  <symbol id="i-clock" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"></circle><path d="M10 6v4.2l2.8 1.8"></path></symbol>
+  <symbol id="i-dot" viewBox="0 0 20 20"><circle cx="10" cy="10" r="4" style="fill: currentColor; stroke: none"></circle></symbol>
+  <symbol id="i-cross" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"></circle><path d="M7.2 7.2l5.6 5.6M12.8 7.2l-5.6 5.6"></path></symbol>
+  <symbol id="i-arrow" viewBox="0 0 20 20"><path d="M4 10h11M11 5.5l4.5 4.5-4.5 4.5"></path></symbol>
+  <symbol id="i-chevron" viewBox="0 0 20 20"><path d="M5 8l5 5 5-5"></path></symbol>
+  <symbol id="i-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="9" height="9" rx="1.5"></rect><path d="M13 7V5a1.5 1.5 0 0 0-1.5-1.5H5A1.5 1.5 0 0 0 3.5 5v6.5A1.5 1.5 0 0 0 5 13h2"></path></symbol>
+  <symbol id="i-plus" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></symbol>
+  <symbol id="i-up" viewBox="0 0 20 20"><path d="M10 4l6 11H4z" style="fill: currentColor; stroke: none"></path></symbol>
+  <symbol id="i-down" viewBox="0 0 20 20"><path d="M10 16L4 5h12z" style="fill: currentColor; stroke: none"></path></symbol>
+  <symbol id="i-flat" viewBox="0 0 20 20"><rect x="4" y="8" width="12" height="4" rx="1" style="fill: currentColor; stroke: none"></rect></symbol>
+  <symbol id="i-run" viewBox="0 0 20 20"><path d="M10 3a7 7 0 1 0 7 7"></path></symbol>
+  <symbol id="mark" viewBox="0 0 28 28">
+    <rect x="2" y="2" width="24" height="24" rx="5" style="fill: none; stroke: var(--side-accent); stroke-width: 1.6"></rect>
+    <path d="M7 19l4.5-5 3.5 3 6-8" style="fill: none; stroke: var(--side-ink); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round"></path>
+    <circle cx="21" cy="9" r="1.8" style="fill: var(--side-accent); stroke: none"></circle>
+  </symbol>
+</svg>

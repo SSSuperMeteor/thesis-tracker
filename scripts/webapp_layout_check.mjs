@@ -136,8 +136,11 @@ for (const target of TWO_COLUMN_PAGES) {
         evidence: pick(".evidence"), input: pick(".chat-input"),
         refusal: pick(".refusal") };
     });
-    if (!styles.user || !styles.answer) failures.push({ check: "chat messages", scheme });
-    else {
+    if (!styles.user) failures.push({ check: "chat messages", scheme });
+    else if (!styles.answer) {
+      // A conversation that has not been answered yet has nothing to compare with.
+      console.log(`     ${scheme} 这个对话还没有回答，跳过两种消息的底色对比`);
+    } else {
       if (styles.user.gradient || styles.answer.gradient) {
         failures.push({ check: "chat gradient", scheme, styles });
       }
@@ -154,12 +157,12 @@ for (const target of TWO_COLUMN_PAGES) {
 }
 }
 
-// ---- 1b. band labels never overlap at any width ----------------------------
+// ---- 1b. the chart's level labels never overlap at any width ----------------------------
 for (const width of WIDES_FOR_BAND) {
   const { context, page } = await open("light", { width, height: 900 });
   await goto(page, `/cards/${cardId}`);
   const result = await page.evaluate(() => {
-    const boxes = Array.from(document.querySelectorAll(".band-mark .stack")).map((node) => {
+    const boxes = Array.from(document.querySelectorAll(".plot .level-label")).map((node) => {
       const box = node.getBoundingClientRect();
       return { text: node.textContent.slice(0, 8), left: box.left, right: box.right,
         top: box.top, bottom: box.bottom };
@@ -175,16 +178,19 @@ for (const width of WIDES_FOR_BAND) {
         }
       }
     }
-    const scroller = document.querySelector(".band-scroll");
-    return { count: boxes.length, overlaps,
-      scrolls: scroller ? scroller.scrollWidth > scroller.clientWidth : false };
+    const plot = document.querySelector(".plot");
+    const inside = plot ? boxes.every((box) => {
+      const frame = plot.getBoundingClientRect();
+      return box.left >= frame.left - 1 && box.right <= frame.right + 1;
+    }) : true;
+    return { count: boxes.length, overlaps, scrolls: !inside };
   });
   if (result.overlaps.length) {
-    failures.push({ check: "band label overlap", width, overlaps: result.overlaps });
+    failures.push({ check: "level label overlap", width, overlaps: result.overlaps });
   }
   console.log(`${result.overlaps.length ? "FAIL" : "OK  "} ${String(width).padStart(4)}px `
-    + `价位带标签 ${result.count} 个，重叠 ${result.overlaps.length}`
-    + `${result.scrolls ? "｜轴容器内滚动" : ""}`);
+    + `图表价位标签 ${result.count} 个，重叠 ${result.overlaps.length}`
+    + `${result.scrolls ? "｜有标签越出绘图区" : ""}`);
   await context.close();
 }
 

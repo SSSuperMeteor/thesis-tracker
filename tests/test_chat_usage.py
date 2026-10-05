@@ -308,3 +308,33 @@ def test_without_a_key_the_balance_is_not_requested(monkeypatch):
     result = balance_module.fetch_balance()
     assert result["is_available"] is None
     assert result["error"] == "未配置 API key，无法查询余额"
+
+
+# -- the one-line summary under the composer -----------------------------------
+
+def test_the_summary_line_reads_the_conversation_and_today_in_one_sentence(store, tmp_path):
+    from thesis_tracker.webapp.chat.usage import usage_summary
+
+    pricing = tmp_path / "pricing.json"
+    pricing.write_text(json.dumps({"input_per_million": 0.30, "output_per_million": 1.20,
+                                   "cache_hit_per_million": 0.006,
+                                   "as_of_date": "2026-10-05"}), encoding="utf-8")
+    conversation = store.create_conversation("AAPL")
+    add_turn(store, conversation["conversation_id"], incoming=12000, outgoing=3400,
+             cached=2000)
+    line = usage_summary(store, conversation_id=conversation["conversation_id"],
+                         pricing_path=pricing)["summary_line"]
+    assert line.startswith("本对话 输入 12,000 输出 3,400 token，约 $")
+    assert "｜今天 输入 12,000 输出 3,400 token" in line
+    assert line.endswith("（费用按高峰价上界估算）")
+
+
+def test_the_summary_line_without_prices_shows_tokens_only(store, tmp_path):
+    from thesis_tracker.webapp.chat.usage import usage_summary
+
+    conversation = store.create_conversation("AAPL")
+    add_turn(store, conversation["conversation_id"], incoming=100, outgoing=20, cached=0)
+    line = usage_summary(store, conversation_id=conversation["conversation_id"],
+                         pricing_path=tmp_path / "absent.json")["summary_line"]
+    assert "$" not in line
+    assert line.endswith("（未找到价格配置，只显示 token）")

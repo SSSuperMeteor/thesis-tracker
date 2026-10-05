@@ -230,3 +230,33 @@ def test_a_database_that_is_not_locked_but_broken_keeps_the_generic_message(
         app.stop()
     assert status == 500
     assert "不可读取" in payload["error"]
+
+
+def test_the_price_status_endpoint_feeds_the_sidebar(tmp_path):
+    from test_webapp_security import TOKEN, json_body
+    from webapp_fixtures import build_fixture
+
+    from thesis_tracker.webapp.server import WebApp
+
+    fixture = build_fixture(tmp_path / "fixture")
+    app = WebApp(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                 card_db=fixture.card_db, job_db=tmp_path / "jobs.db", token=TOKEN,
+                 port=0, start_worker=False)
+    app.start()
+    try:
+        status, payload = json_body(app, "/api/price-status")
+        unauthenticated = json_body(app, "/api/price-status", token=None)[0]
+    finally:
+        app.stop()
+    assert status == 200
+    assert unauthenticated == 401
+    assert payload["price_command"] == "uv run prices-ingest"
+    assert payload["stale_after_days"] == 5
+    # NVDA's fixture prices are months old and MSFT has none: stale, and says so.
+    assert payload["stale"] is True
+    assert payload["missing"] == 1
+    assert payload["latest_price_date"] == "2026-02-02" or payload["latest_price_date"]
+    assert payload["lag_days"] >= 0
+    assert payload["lag_text"] == f"落后 {payload['lag_days']} 天"
+    assert payload["headline"] == "价格已过期"
+    assert payload["sub_text"] == f"最新 {payload['latest_price_date']}，落后 {payload['lag_days']} 天"

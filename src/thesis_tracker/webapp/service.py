@@ -23,8 +23,8 @@ from thesis_tracker.decision.evidence import display_label, display_text
 from thesis_tracker.financial.pit_store import DEFAULT_FACT_DB
 from thesis_tracker.financial.tool import get_fundamental_metrics
 from thesis_tracker.prices import DEFAULT_DB as DEFAULT_PRICE_DB
+from thesis_tracker.webapp import charts, display
 from thesis_tracker.webapp import data as store
-from thesis_tracker.webapp import display
 
 # Advisory thresholds for the card page's hint line.  These are heuristics,
 # not validated rules: they are shown next to the numbers, never fed back into
@@ -292,6 +292,43 @@ def mark_empty_cells(company: dict, quarters: list[str]) -> None:
     company["dashed_quarters"] = sorted(dashed)
 
 
+def price_status(*, fact_db: Path | str = DEFAULT_FACT_DB,
+                 price_db: Path | str = DEFAULT_PRICE_DB,
+                 reference_date: str | None = None) -> dict:
+    """The one line the sidebar shows about how fresh the stored prices are.
+
+    It is the overview's own rule (oldest of the companies' newest price dates, so
+    one lagging company is never hidden) without the filing tables, so the shell
+    can ask on every navigation.  Wording is decided here; the page renders it.
+    """
+    reference = reference_date or date.today().isoformat()
+    symbols = sorted(set(store.tickers(fact_db))
+                     | {symbol for symbol in store.price_bounds(price_db)
+                        if symbol != "SPY"})
+    summaries = [price_summary(price_db, symbol, reference) for symbol in symbols]
+    dated = [item["end_date"] for item in summaries if item["end_date"]]
+    missing = sum(1 for item in summaries if not item["end_date"])
+    command = "uv run prices-ingest"
+    if not dated:
+        return {"latest_price_date": None, "lag_days": None, "missing": missing,
+                "stale": True, "stale_after_days": PRICE_STALENESS_DAYS,
+                "price_command": command, "reference_date": reference,
+                "headline": "没有价格数据", "sub_text": "先运行价格采集命令",
+                "lag_text": None, "detail": "本地还没有任何公司的价格。"}
+    oldest = min(dated)
+    lag = (date.fromisoformat(reference) - date.fromisoformat(oldest)).days
+    stale = lag > PRICE_STALENESS_DAYS or missing > 0
+    detail = f"落后 {lag} 天；超过 {PRICE_STALENESS_DAYS} 个日历日未更新即视为过期。"
+    if missing:
+        detail += f"另有 {missing} 家公司没有价格数据。"
+    return {"latest_price_date": oldest, "lag_days": lag, "lag_text": f"落后 {lag} 天",
+            "missing": missing, "stale": stale, "stale_after_days": PRICE_STALENESS_DAYS,
+            "price_command": command, "reference_date": reference,
+            "headline": "价格已过期" if stale else "价格有效",
+            "sub_text": f"最新 {oldest}，落后 {lag} 天",
+            "detail": detail}
+
+
 def card_count(card_db: Path | str, ticker: str) -> int:
     return len(store.card_rows(card_db, ticker=ticker))
 
@@ -332,9 +369,19 @@ def overview(*, fact_db: Path | str = DEFAULT_FACT_DB,
         }
     quarters = trim_quarters(sorted({key for company in companies.values()
                                      for key in company["periods"]}), companies)
+    current = quarter_key(reference)
+    # The quarter the reader is in always has a column, even when nobody has
+    # reported for it yet: it is blank (never dashed), and it says where "now" is.
+    if quarters and current > quarters[-1]:
+        quarters = quarter_range(quarters[0], current)
     for company in companies.values():
         mark_empty_cells(company, quarters)
+    sparks = charts.sparklines(price_db, [ticker for ticker, company in companies.items()
+                                          if company["price"]["available"]])
+    for ticker, company in companies.items():
+        company["spark"] = sparks.get(ticker, charts.sparkline([]))
     return {
+        "current_quarter": current,
         "reference_date": reference,
         "stale_after_days": PRICE_STALENESS_DAYS,
         "empty_gap_days": EMPTY_GAP_DAYS,
@@ -576,6 +623,21 @@ def group_facts(facts: list[dict]) -> list[dict]:
             for key in FACT_GROUP_ORDER if key in grouped]
 
 
+def formula_text(source: dict | None) -> str | None:
+    """A derived fact's formula with its operands named, for the hover text.
+
+    ``a - b`` alone says nothing; ``a - b，a = <id>，b = <id>`` says which two
+    numbers were combined.  Facts that are not computed have no formula.
+    """
+    source = source or {}
+    formula = source.get("formula")
+    if not formula:
+        return None
+    operands = [f"{letter} = {fact_id}" for letter, fact_id
+                in zip("abcdefgh", source.get("source_fact_ids") or [])]
+    return "，".join([str(formula), *operands])
+
+
 def fact_rows(facts: list[dict]) -> list[dict]:
     """Evidence rows as the pages show them.
 
@@ -619,6 +681,7 @@ def fact_rows(facts: list[dict]) -> list[dict]:
             "source_label": source_label(source),
             "provider": source.get("provider"),
             "formula": source.get("formula"),
+            "formula_text": formula_text(source),
             "source_fact_ids": source.get("source_fact_ids") or [],
             "card_id": item.get("card_id"),
             "annotation": item.get("annotation"),
@@ -894,6 +957,7 @@ def company_page(*, fact_db: Path | str = DEFAULT_FACT_DB,
         "price_command": "uv run prices-ingest",
         "filings": rows,
         "price": price,
+        "chart": charts.price_chart(price_db, ticker),
         "fundamentals": fundamentals(fact_db, ticker, cutoff),
         "cards": card_list(card_db=card_db, ticker=ticker),
     }
@@ -928,7 +992,37 @@ def _line(text: str) -> list[dict]:
     return [{"type": "text", "value": text}]
 
 
-def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
+PRICED_ACTIONS = frozenset({"买入", "分批", "持有"})
+
+
+def chart_inputs(card: dict) -> tuple[dict | None, str | None, float | None, str | None]:
+    """What a card adds to its chart: levels, why there are none, and its close.
+
+    Only the three priced actions have levels.  An action without them draws no
+    level line at all, and the chart says so instead of leaving the reader to
+    wonder; a missing level is omitted, never drawn at zero.
+    """
+    close = _number(card.get("creation_price"))
+    day = next((item.get("date_or_period") for item in card.get("facts") or []
+                if item.get("name") == "close"), None) or card.get("as_of")
+    close_price = None if close is None else float(close)
+    if card.get("action") not in PRICED_ACTIONS:
+        return None, "此动作没有价位，不画价位线。", close_price, day
+    entry = card.get("entry_range")
+    bounds = None
+    if isinstance(entry, list) and len(entry) == 2:
+        low, high = _number(entry[0]), _number(entry[1])
+        if low is not None and high is not None:
+            bounds = (float(low), float(high))
+    stop, target = _number(card.get("stop_loss")), _number(card.get("target_price"))
+    levels = {"entry": bounds,
+              "stop": None if stop is None else float(stop),
+              "target": None if target is None else float(target)}
+    return levels, None, close_price, day
+
+
+def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str,
+                price_db: Path | str = DEFAULT_PRICE_DB) -> dict:
     """Structured card detail. Archived cards are never sent to a model again."""
     import json
 
@@ -992,6 +1086,7 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
         "target_price": display_text(_number(card.get("target_price")), "USD/share",
                                      name="close"),
         "price_band": price_band(card),
+        "chart": _card_chart(card, price_db, row["ticker"]),
         "facts": facts,
         "stop_rationale": _segments(card.get("stop_rationale") or "", index),
         "target_rationale": _segments(card.get("target_rationale") or "", index),
@@ -1023,6 +1118,12 @@ def card_detail(*, card_db: Path | str = DEFAULT_ARCHIVE, card_id: str) -> dict:
                   "output_tokens": row["output_tokens"],
                   "cache_hit_tokens": row["cache_hit_tokens"]},
     }
+
+
+def _card_chart(card: dict, price_db: Path | str, ticker: str) -> dict:
+    levels, note, close_price, close_date = chart_inputs(card)
+    return charts.price_chart(price_db, ticker, levels=levels, levels_note=note,
+                              close_price=close_price, close_date=close_date)
 
 
 def _owning_analysis(attempts: list[dict], row: dict) -> str | None:

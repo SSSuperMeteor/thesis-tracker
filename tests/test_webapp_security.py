@@ -276,3 +276,18 @@ def test_the_server_binds_loopback_only(server):
     with socket.socket() as probe:
         probe.settimeout(5)
         assert probe.connect_ex(("127.0.0.1", server.port)) == 0
+
+
+def test_an_oversized_body_is_always_answered_never_reset(server):
+    """The 413 must reach the client every time, not only when the race is won.
+
+    The server used to answer and close without reading the body it had refused;
+    closing a socket that still holds unread data makes the kernel send a reset,
+    and the client then saw a connection error instead of the 413 (one run in
+    about fifteen).  Thirty in a row makes the old behaviour fail almost surely.
+    """
+    for _ in range(30):
+        status, _, data = request(server, "/api/analyze", method="POST",
+                                  body={"ticker": "A" * 200_000, "confirm": True})
+        assert status == 413
+        assert json.loads(data.decode())["error"] == "请求体超过上限。"

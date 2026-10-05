@@ -123,14 +123,24 @@ def test_the_overview_ships_a_legend():
     assert EMPTY_GAP_DAYS == 135
 
 
-def test_a_card_cell_with_filings_is_visually_distinct_from_a_missing_one():
+def test_a_filing_block_is_visually_distinct_from_a_missing_one():
+    """10-K is a solid block, 10-Q a tinted one, a hole is hatched with a dashed edge.
+
+    The three differ in fill *and* shape (a letter on a block versus an empty
+    hatched square), so the matrix still reads in greyscale.
+    """
     css = read(STATIC / "app.css")
-    filled = re.search(r"\.cell\.has-filing\s*\{([^}]*)\}", css)
-    assert filled is not None, "a filled coverage cell needs its own rule"
-    assert "background" in filled.group(1)
-    missing = re.search(r"\.cell\.is-missing[^{]*\{([^}]*)\}", css)
-    assert missing is not None
-    assert "dashed" in missing.group(1)
+    solid = re.search(r"\.blk\.k\s*\{([^}]*)\}", css)
+    tinted = re.search(r"\.blk\.q\s*\{([^}]*)\}", css)
+    assert solid is not None and tinted is not None
+    assert "background: var(--accent)" in solid.group(1)
+    assert "background: var(--accent-2)" in tinted.group(1)
+    assert solid.group(1) != tinted.group(1)
+    hole = re.search(r"\.hole rect\s*\{([^}]*)\}", css)
+    assert hole is not None
+    assert "url(#hatch)" in hole.group(1)
+    assert "dashed" not in hole.group(1) or "stroke-dasharray" in hole.group(1)
+    assert "stroke-dasharray" in hole.group(1)
 
 
 def test_only_clickable_text_uses_the_accent_colour():
@@ -166,9 +176,10 @@ def test_every_progress_event_kind_has_its_own_wording():
         assert f'"{kind}"' in step, kind
 
 
-def test_the_band_carries_no_heading_of_its_own():
-    """The axis plus its legend are self-explanatory; a label would repeat them."""
+def test_the_card_page_draws_its_levels_once_in_the_chart_not_also_as_a_band():
+    """One picture of the levels, not two: the chart replaced the price band."""
     script = read(STATIC / "app.js")
-    band = script.split("function priceBand")[1].split("/* ------")[0]
-    assert '"价位带"' not in band
-    assert "band-legend" in band
+    css = read(STATIC / "app.css")
+    assert "priceBand" not in script and "price_band" not in script
+    assert "band-legend" not in css and ".band-mark" not in css
+    assert "priceChart(card.chart" in script

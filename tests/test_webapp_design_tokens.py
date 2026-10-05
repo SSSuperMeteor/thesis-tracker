@@ -30,6 +30,17 @@ TEXT_PAIRS = [
     ("--ok", "--paper"), ("--ok", "--surface"), ("--ok", "--surface-2"),
     ("--warn", "--paper"), ("--warn", "--surface"), ("--warn", "--surface-2"),
     ("--bad", "--paper"), ("--bad", "--surface"), ("--bad", "--surface-2"),
+    # the dark sidebar: wordmark, nav text, the stale-price pill, the active item
+    ("--side-ink", "--side-bg"), ("--side-ink-2", "--side-bg"),
+    ("--side-ink", "--side-active"), ("--side-ink-2", "--side-active"),
+    ("--side-warn", "--side-bg"), ("--side-warn", "--side-active"),
+    ("--side-accent", "--side-bg"),
+    # the accent in four strengths: solid blocks carry white (or, in dark, near-black)
+    # text; the three tints carry ordinary ink; links sit on the faint tints
+    ("--on-accent", "--accent"),
+    ("--ink", "--accent-1"), ("--ink", "--accent-2"), ("--ink", "--accent-3"),
+    ("--ink-2", "--accent-1"), ("--accent", "--accent-1"), ("--accent", "--accent-2"),
+    ("--accent", "--accent-3"), ("--warn", "--accent-1"),
 ]
 
 # Non-text marks that carry information or bound an interactive control need
@@ -41,6 +52,10 @@ UI_PAIRS = [
     ("--ctl-rule", "--paper"), ("--ctl-rule", "--surface"), ("--ctl-rule", "--surface-2"),
     ("--accent", "--paper"), ("--accent", "--surface"), ("--accent", "--surface-2"),
     ("--none", "--paper"), ("--none", "--surface"), ("--none", "--surface-2"),
+    ("--none", "--accent-1"),                 # hatching on the current-quarter column
+    ("--side-accent", "--side-bg"), ("--side-accent", "--side-active"),  # focus ring, active bar
+    ("--accent", "--accent-2"),               # a badge's outline on its tint
+    ("--ctl-rule", "--accent-2"),             # the selected range tab's outline
 ]
 
 
@@ -142,5 +157,26 @@ def test_the_design_tokens_cover_every_colour_the_pages_need(theme):
     for tokens in theme.values():
         for required in ("--paper", "--surface", "--surface-2", "--ink", "--ink-2",
                          "--rule", "--ctl-rule", "--accent", "--accent-soft", "--ok",
-                         "--warn", "--bad", "--none"):
+                         "--warn", "--bad", "--none", "--accent-1", "--accent-2",
+                         "--accent-3", "--on-accent", "--side-bg", "--side-ink",
+                         "--side-ink-2", "--side-rule", "--side-active", "--side-accent",
+                         "--side-warn"):
             assert required in tokens, required
+
+
+def test_the_sidebar_is_dark_in_both_themes(theme):
+    """The shell's one constant: a deep ink sidebar whatever the page theme is."""
+    for name, tokens in theme.items():
+        assert luminance(tokens["--side-bg"]) < 0.02, name
+        assert luminance(tokens["--side-active"]) < 0.05, name
+        assert luminance(tokens["--side-ink"]) > 0.7, name
+
+
+def test_the_three_accent_tints_step_in_strength(theme):
+    """--accent-1 is the faintest and --accent-3 the strongest of the tints, so a
+    hover on a 10-Q block (accent-2 to accent-3) is always visible."""
+    for name, tokens in theme.items():
+        steps = [contrast(tokens[key], tokens["--surface"])
+                 for key in ("--accent-1", "--accent-2", "--accent-3")]
+        assert steps == sorted(steps), (name, steps)
+        assert steps[0] < steps[-1], name

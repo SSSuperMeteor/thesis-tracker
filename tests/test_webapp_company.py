@@ -160,3 +160,24 @@ def test_the_price_fetch_time_is_a_local_minute_string_not_an_iso_timestamp(page
     assert len(window["retrieved_at_display"]) == len("2026-10-05 00:40")
     assert "T" not in window["retrieved_at_display"]
     assert "+00:00" not in window["retrieved_at_display"]
+
+
+def test_the_company_page_carries_a_chart_with_three_ranges(page):
+    chart = page["chart"]
+    assert chart["available"] is True
+    assert [item["key"] for item in chart["ranges"]] == ["3m", "1y", "5y"]
+    assert chart["ranges"][0]["levels"] == []   # a company page has no card levels
+
+
+def test_the_chart_ends_on_the_newest_stored_price(page):
+    assert page["chart"]["ranges"][0]["points"][-1]["date"] == page["price"]["end_date"]
+
+
+def test_a_company_without_prices_has_no_chart_and_says_why(fixture):
+    from thesis_tracker.webapp.service import company_page
+
+    msft = company_page(fact_db=fixture.fact_db, price_db=fixture.price_db,
+                        card_db=fixture.card_db, ticker="MSFT", as_of="2026-09-07",
+                        reference_date=fixture.reference_date)
+    assert msft["chart"]["available"] is False
+    assert msft["chart"]["reason"]
