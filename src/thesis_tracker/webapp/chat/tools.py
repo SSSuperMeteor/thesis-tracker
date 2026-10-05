@@ -39,10 +39,25 @@ CARD_PRICE_FIELDS = ("action", "tendency", "horizon", "entry_low", "entry_high",
                      "stop_loss", "target_price", "created_at")
 # compare_facts operations and the formula each one records in the derived fact.
 COMPARE_OPS = {
+    # The three the round specifies, plus the two that make a card's own printed
+    # arithmetic reachable: a buy range's midpoint is (low + high) / 2, which
+    # needs an addition and a halving.  Without them the model would have to
+    # invent that number, which C01 rejects.
     "difference": "a - b",
     "ratio": "a / b",
     "pct_change": "(a - b) / b",
+    "addition": "a + b",
+    "product": "a * scale",
 }
+# The only dimensionless factors a comparison may use, written exactly.  They are
+# ratios of published numbers rather than measurements, so they are the one kind
+# of operand the model may supply itself: "half the range" must be expressible
+# without the model doing arithmetic C01 would then reject.
+ALLOWED_SCALES = (0.5, 1.0, 2.0)
+# A product is the one operation whose unit is not the operands' own, so it is
+# the only one that may combine a quantity with a dimensionless factor.  This is
+# what lets a buy range's midpoint be reached from the card's own fields.
+UNIT_FREE_OPS = frozenset({"ratio", "pct_change", "product"})
 DERIVED_PREFIX = "derived|chat|"
 CARD_ANNOTATION = "AI 判断"
 
@@ -50,7 +65,8 @@ SYSTEM_FACT_LABELS = {"action": "动作", "tendency": "倾向", "horizon": "周�
                       "entry_low": "买点下沿", "entry_high": "买点上沿",
                       "stop_loss": "止损", "target_price": "目标",
                       "created_at": "创建时间"}
-COMPARE_LABELS = {"difference": "差值", "ratio": "比值", "pct_change": "百分比变化"}
+COMPARE_LABELS = {"difference": "差值", "ratio": "比值", "pct_change": "百分比变化",
+                  "addition": "合计", "product": "乘积"}
 
 TOOL_NAMES = ("get_price_history", "get_indicators", "get_fundamental_metrics",
               "list_cards", "get_card", "compare_facts", "request_new_card")
@@ -148,7 +164,7 @@ class ToolBox:
             "get_fundamental_metrics": {"ticker"},
             "list_cards": set(),
             "get_card": {"card_id"},
-            "compare_facts": {"a", "b", "op"},
+            "compare_facts": {"a", "b", "op", "scale"},
             "request_new_card": {"horizon", "reason"},
         }.get(name, set())
 
@@ -222,7 +238,13 @@ class ToolBox:
                                    "b": {"type": "string", "description": "Right fact id."},
                                    "op": {"type": "string", "enum": list(COMPARE_OPS),
                                           "description": ("difference: a - b. ratio: a / b. "
-                                                          "pct_change: (a - b) / b.")}},
+                                                          "pct_change: (a - b) / b. "
+                                                          "product: a * scale.")},
+                                   "scale": {"type": "number",
+                                             "enum": list(ALLOWED_SCALES),
+                                             "description": ("Only for product: the factor to "
+                                                             "multiply a by. Use 0.5 for half "
+                                                             "of a span.")}},
                                "required": ["a", "b", "op"]}}},
             {"type": "function", "function": {
                 "name": "request_new_card",
@@ -425,12 +447,51 @@ class ToolBox:
     # -- arithmetic ----------------------------------------------------------
 
     def _tool_compare_facts(self, a: str | None = None, b: str | None = None,
-                            op: str | None = None) -> dict:
+                            op: str | None = None, scale: float | None = None) -> dict:
         if op not in COMPARE_OPS:
             return _error("unsupported_op",
                           f"op 只能是 {', '.join(COMPARE_OPS)}；收到 {op}。",
                           as_of=self.as_of, tool="compare_facts")
         known = self.facts()
+        if op == "product":
+            if scale not in ALLOWED_SCALES:
+                return _error("unsupported_scale",
+                              f"product 需要一个 scale，且只能是 "
+                              f"{'、'.join(str(item) for item in ALLOWED_SCALES)}；"
+                              f"收到 {scale}。",
+                              as_of=self.as_of, tool="compare_facts")
+            right = {"unit": "ratio", "value": str(scale), "fact_id": f"scale|{scale}",
+                     "name": "scale"}
+            left = known.get(a)
+            if left is None:
+                return _error("unknown_fact",
+                              f"编号 {a} 不在这个对话的证据里。"
+                              "只能引用本对话工具返回过的事实或读过的卡价位。",
+                              as_of=self.as_of, tool="compare_facts")
+            second = _decimal(scale)
+            first = _decimal(left["value"])
+            if first is None or second is None:
+                return _error("not_computable", "这个事实不是可运算的数值。",
+                              as_of=self.as_of, tool="compare_facts")
+            result = first * second
+            unit = left["unit"]
+            fact_id = derived_fact_id(a, f"scale:{scale}", op)
+            display = display_text(str(result), unit, name=f"compare_{op}")
+            if display is None:
+                return _error("not_computable", "运算结果无法按现有显示规则呈现。",
+                              as_of=self.as_of, tool="compare_facts")
+            fact = {"fact_id": fact_id, "name": f"compare_{op}",
+                    "label": COMPARE_LABELS[op], "value": _canonical_number(result),
+                    "unit": unit, "display": display,
+                    "date_or_period": left.get("date_or_period"), "ticker": self.ticker,
+                    "category": "derived", "origin": "derived",
+                    "source": {"provider": "derived",
+                               "formula": f"a * {scale:g}",
+                               "source_fact_ids": [a]}}
+            return _envelope(as_of=self.as_of,
+                             data={"fact": fact, "formula": f"a * {scale:g}",
+                                   "operands": {"a": a, "op": op, "scale": scale}},
+                             source=fact["source"], fact_id=fact_id)
         left, right = known.get(a), known.get(b)
         if left is None or right is None:
             missing = a if left is None else b
@@ -439,16 +500,31 @@ class ToolBox:
                           "只能引用本对话工具返回过的事实或读过的卡价位。",
                           as_of=self.as_of, tool="compare_facts")
         if left["unit"] != right["unit"]:
-            return _error("unit_mismatch",
-                          f"两个操作数单位不同（{left['unit']} 与 {right['unit']}），"
-                          "不能直接运算。请选择单位相同的事实。",
-                          as_of=self.as_of, tool="compare_facts")
+            # A product may scale one quantity by a dimensionless factor, which
+            # is how "half the buy range's span" is expressed with operations the
+            # model may compose.  Two quantities of different units still cannot
+            # be multiplied: the result would have no meaning to display.
+            factor_units = {"ratio", "percent"}
+            quantities = [unit for unit in (left["unit"], right["unit"])
+                          if unit not in factor_units]
+            compatible = (op == "product"
+                          and any(unit in factor_units
+                                  for unit in (left["unit"], right["unit"]))
+                          and len(quantities) <= 1)
+            if not compatible:
+                return _error("unit_mismatch",
+                              f"两个操作数单位不同（{left['unit']} 与 {right['unit']}），"
+                              "不能直接运算。请选择单位相同的事实，"
+                              "或用 ratio/percent 乘一个数量。",
+                              as_of=self.as_of, tool="compare_facts")
         first, second = _decimal(left["value"]), _decimal(right["value"])
         if first is None or second is None:
             return _error("not_computable", "这两个事实里有一个不是可运算的数值。",
                           as_of=self.as_of, tool="compare_facts")
         if op == "difference":
             result = first - second
+        elif op == "addition":
+            result = first + second
         elif op == "ratio":
             if second == 0:
                 return _error("division_by_zero",
@@ -460,7 +536,10 @@ class ToolBox:
                 return _error("division_by_zero",
                               "第二个操作数为零，百分比变化没有定义（不能除以零）。",
                               as_of=self.as_of, tool="compare_facts")
-            result = (first - second) / second
+            # The shared display rule multiplies a `percent` value by 100, the
+            # same way it renders a stored margin of 0.5 as 50.00%.  Handing it
+            # the raw fraction displayed a 3.88% move as 0.04%.
+            result = (first - second) / second * 100
         unit = _result_unit(op, left["unit"])
         fact_id = derived_fact_id(a, b, op)
         display = display_text(str(result), unit, name=f"compare_{op}")
@@ -510,11 +589,19 @@ class ToolBox:
     # -- fact extraction -----------------------------------------------------
 
     def _facts_from(self, envelope: dict, tool: str) -> list[dict]:
-        """Compile an envelope's observable values into citable facts."""
+        """Compile an envelope's observable values into citable facts.
+
+        The dispatch is by *tool name*, never by the shape of the payload or the
+        prefix of an id.  Both of those were tried and both were wrong:
+        ``compare_facts`` also returns a ``prices``-less dict, and a derived
+        fact's id could be mistaken for a card's, so a computed fact silently
+        never entered the evidence set and the next step of a chain could not
+        cite it.
+        """
         if envelope.get("status") != "ok":
             return []
         data = envelope.get("data")
-        if isinstance(data, dict) and "prices" in data:
+        if tool == "get_card" and isinstance(data, dict):
             # Reading a card makes two things citable: its judgment fields as
             # pseudo-facts, and its own archived evidence facts.
             card_facts = [{**fact, "ticker": data.get("ticker"),
@@ -522,10 +609,8 @@ class ToolBox:
                            "source": {"provider": "decision_archive",
                                       "card_id": data["card_id"]}}
                           for fact in data.get("facts") or []]
-            return [*data["prices"], *card_facts]
-        if str(envelope.get("fact_id") or "").startswith("card|"):
-            return []
-        if isinstance(data, dict) and "fact" in data:
+            return [*(data.get("prices") or []), *card_facts]
+        if tool == "compare_facts" and isinstance(data, dict) and "fact" in data:
             return [data["fact"]]
         return compile_facts(envelope, tool=tool, ticker=self.ticker)
 
@@ -551,7 +636,7 @@ def _result_unit(op: str, unit: str) -> str:
     ``ratio`` renders as a plain four-decimal number and ``percent`` as a
     percentage, both by the shared display rule, so the choice matters.
     """
-    if op == "difference":
+    if op in {"difference", "addition"}:
         return unit
     return "ratio" if op == "ratio" else "percent"
 

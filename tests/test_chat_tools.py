@@ -346,3 +346,110 @@ def test_a_tool_call_records_its_envelope_bytes_and_facts(toolbox):
 def _only_card(toolbox):
     """The single card the fixture company has, without hardcoding its id."""
     return toolbox.cards()[0]["card_id"]
+
+
+def test_the_cards_printed_stop_distance_is_reachable_from_its_own_facts(toolbox,
+                                                                        fixture):
+    """Reachability is the requirement, not a nicety.
+
+    The card prints (入场价 − 止损) / 入场价 with 入场价 the buy range's midpoint.
+    If a chat answer about that distance could not be composed from the card's own
+    fields, the model would have to invent the number, which C01 rejects.  The
+    chain is difference → product(0.5) → difference → pct_change, and this test
+    walks every step of it.
+    """
+    from thesis_tracker.webapp.chat.tools import ALLOWED_SCALES
+
+    assert ALLOWED_SCALES == (0.5, 1.0, 2.0)
+    card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+
+    span = call(toolbox, "compare_facts", a=prices["entry_high"]["fact_id"],
+                b=prices["entry_low"]["fact_id"], op="difference")["data"]["fact"]
+    assert span["unit"] == "USD/share"
+    half = call(toolbox, "compare_facts", a=span["fact_id"], op="product",
+                scale=0.5)["data"]["fact"]
+    assert half["unit"] == "USD/share"
+    assert half["source"]["formula"] == "a * 0.5"
+    assert half["source"]["source_fact_ids"] == [span["fact_id"]]
+    midpoint = call(toolbox, "compare_facts", a=prices["entry_low"]["fact_id"],
+                    b=half["fact_id"], op="addition")["data"]["fact"]
+    assert midpoint["unit"] == "USD/share"
+    distance = call(toolbox, "compare_facts", a=midpoint["fact_id"],
+                    b=prices["stop_loss"]["fact_id"], op="pct_change")["data"]["fact"]
+    assert distance["display"].endswith("%")
+    # Every step is a citable fact in this conversation.
+    facts = toolbox.facts()
+    assert {span["fact_id"], half["fact_id"], midpoint["fact_id"],
+            distance["fact_id"]} <= set(facts)
+
+
+def test_a_product_needs_one_of_the_allowed_scales(toolbox, fixture):
+    card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+    for scale in (None, 0.7, 3, "0.5"):
+        refused = call(toolbox, "compare_facts", a=prices["entry_low"]["fact_id"],
+                       op="product", scale=scale)
+        assert refused["status"] == "error", scale
+        assert refused["reason"]["code"] == "unsupported_scale"
+        assert "0.5" in refused["reason"]["message"]
+
+
+def test_a_product_still_refuses_an_unknown_operand(toolbox):
+    refused = call(toolbox, "compare_facts", a="nope|1", op="product", scale=0.5)
+    assert refused["status"] == "error"
+    assert refused["reason"]["code"] == "unknown_fact"
+
+
+def test_every_derived_fact_stays_citable_through_a_whole_chain(toolbox, fixture):
+    """A chain is only useful if each step can cite the step before it.
+
+    The dispatch used to key on payload shape and id prefix, so a derived fact
+    looked like a card fact and was dropped: the next step then reported
+    unknown_fact even though the previous call had just returned it.
+    """
+    card = call(toolbox, "get_card", card_id=fixture.card_id)["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+    span = call(toolbox, "compare_facts", a=prices["entry_high"]["fact_id"],
+                b=prices["entry_low"]["fact_id"], op="difference")["data"]["fact"]
+    half = call(toolbox, "compare_facts", a=span["fact_id"], op="product",
+                scale=0.5)["data"]["fact"]
+    midpoint = call(toolbox, "compare_facts", a=prices["entry_low"]["fact_id"],
+                    b=half["fact_id"], op="addition")["data"]["fact"]
+    distance = call(toolbox, "compare_facts", a=midpoint["fact_id"],
+                    b=prices["stop_loss"]["fact_id"], op="pct_change")["data"]["fact"]
+    # The arithmetic is the card's own, from its own published numbers: the
+    # midpoint must be the two ends' average, whatever this card's range is.
+    low = float(prices["entry_low"]["value"])
+    high = float(prices["entry_high"]["value"])
+    assert float(span["value"]) == pytest.approx(high - low)
+    assert float(half["value"]) == pytest.approx((high - low) / 2)
+    assert float(midpoint["value"]) == pytest.approx((low + high) / 2)
+    assert distance["unit"] == "percent"
+    # And every intermediate is in the conversation's evidence set.
+    facts = toolbox.facts()
+    for step in (span, half, midpoint, distance):
+        assert step["fact_id"] in facts, step["fact_id"]
+
+
+def test_a_percentage_change_is_a_percentage_not_a_fraction(toolbox):
+    """The display rule scales a `percent` value by 100; so must this tool.
+
+    Handing it the raw fraction showed a 5% move as 0.05%, a hundredfold error
+    that no test caught because both numbers look plausible.
+    """
+    card = call(toolbox, "get_card", card_id=_only_card(toolbox))["data"]
+    prices = {item["field"]: item for item in card["prices"]}
+    # (low - low) / low is zero ...
+    zero = call(toolbox, "compare_facts", a=prices["entry_low"]["fact_id"],
+                b=prices["entry_low"]["fact_id"], op="pct_change")["data"]["fact"]
+    assert zero["display"] == "0.00%"
+    # ... and a doubling is +100%.
+    double = call(toolbox, "compare_facts", a=prices["entry_high"]["fact_id"],
+                  b=prices["entry_low"]["fact_id"], op="ratio")["data"]["fact"]
+    assert double["unit"] == "ratio"
+    assert double["display"].replace(".", "", 1).isdigit()
+    # pct_change of a value against itself halved: build it from the span.
+    span = call(toolbox, "compare_facts", a=prices["entry_low"]["fact_id"],
+                b=prices["entry_low"]["fact_id"], op="difference")["data"]["fact"]
+    assert span["display"].endswith("美元/股")
