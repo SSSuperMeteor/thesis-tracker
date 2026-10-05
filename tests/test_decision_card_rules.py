@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import copy
-import socket
 
 import pytest
+from webapp_fixtures import guard_offline
 
 from thesis_tracker.decision.core import (
     ACTION_WORDS,
@@ -25,11 +25,7 @@ AS_OF = "2026-10-04"
 
 @pytest.fixture
 def offline(monkeypatch):
-    def denied(*args, **kwargs):
-        raise AssertionError("network access attempted")
-
-    monkeypatch.setattr(socket.socket, "connect", denied)
-    monkeypatch.setattr(socket.socket, "connect_ex", denied)
+    guard_offline(monkeypatch)
 
 
 @pytest.fixture

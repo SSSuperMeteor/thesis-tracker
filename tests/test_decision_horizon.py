@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-import socket
 
 import pytest
+from webapp_fixtures import guard_offline
 
 from thesis_tracker.decision.agent import SYSTEM_PROMPT, run_analysis, system_prompt
 from thesis_tracker.decision.analyze_cli import main as analyze_main
@@ -22,11 +22,7 @@ TIER_TOOL = "get_price_history_tier"
 
 @pytest.fixture
 def offline(monkeypatch):
-    def denied(*args, **kwargs):
-        raise AssertionError("network access attempted")
-
-    monkeypatch.setattr(socket.socket, "connect", denied)
-    monkeypatch.setattr(socket.socket, "connect_ex", denied)
+    guard_offline(monkeypatch)
 
 
 def test_system_prompt_states_the_requested_horizon():

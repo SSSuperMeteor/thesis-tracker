@@ -24,6 +24,7 @@ data/corpus.db-*
 data/raw/
 data/cache/
 data/decisions/
+data/webapp/
 
 eval/results/
 *.log

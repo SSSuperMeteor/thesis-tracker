@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import socket
 import sqlite3
 
 import pytest
+from webapp_fixtures import guard_offline
 
 from thesis_tracker.decision.agent import DeepSeekClient, _parse_draft, run_analysis
 from thesis_tracker.decision.analyze_cli import main as analyze_main
@@ -64,11 +64,7 @@ def legal_draft():
 
 @pytest.fixture
 def offline(monkeypatch):
-    def denied(*args, **kwargs):
-        raise AssertionError("network used in fake-client test")
-
-    monkeypatch.setattr(socket.socket, "connect", denied)
-    monkeypatch.setattr(socket.socket, "connect_ex", denied)
+    guard_offline(monkeypatch)
 
 
 def test_normal_tool_loop_archives_valid_card_and_echoes_reasoning(legal_draft, offline, tmp_path):

@@ -7,10 +7,13 @@ import json
 import re
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 
 from thesis_tracker.decision.core import capture_snapshot, data_gaps, fact_index
+from thesis_tracker.financial.pit_store import DEFAULT_FACT_DB
 from thesis_tracker.financial.tool import get_fundamental_metrics
 from thesis_tracker.indicator_tool import get_indicators
+from thesis_tracker.prices import DEFAULT_DB as DEFAULT_PRICE_DB
 from thesis_tracker.prices import get_price_history
 
 MAX_ENVELOPE_BYTES = 32 * 1024
@@ -363,24 +366,32 @@ def _record(snapshot: dict, tool: str, args: dict, envelope: dict) -> None:
     snapshot["calls"].append({"tool": tool, "args": args, "envelope": envelope})
 
 
-def prepare_evidence(ticker: str, as_of: str, *, horizon: str = "mid"
+def prepare_evidence(ticker: str, as_of: str, *, horizon: str = "mid",
+                     price_db: Path | str = DEFAULT_PRICE_DB,
+                     fact_db: Path | str = DEFAULT_FACT_DB
                      ) -> tuple[dict, dict, str]:
-    """Prefetch the three defaults, the horizon's history tier, then source rows."""
+    """Prefetch the three defaults, the horizon's history tier, then source rows.
+
+    ``price_db``/``fact_db`` default to the same constants the tools use, so an
+    omitted argument is byte-identical to the previous behaviour.
+    """
     if horizon not in HORIZON_RESOLUTIONS:
         raise ValueError("unknown horizon")
-    snapshot = capture_snapshot(ticker, as_of)
+    snapshot = capture_snapshot(ticker, as_of, price_db=price_db, fact_db=fact_db)
     price = snapshot["calls"][0]["envelope"]
     if price["status"] == "ok":
         cursor = price["data"]["next_end_date"]
         earliest = _months_before(date.fromisoformat(price["data"]["data_end_date"]), 60).isoformat()
         while cursor and cursor >= earliest:
-            envelope = get_price_history(ticker, as_of=as_of, full_history=True, end_date=cursor)
+            envelope = get_price_history(ticker, as_of=as_of, full_history=True,
+                                         end_date=cursor, db_path=price_db)
             _record(snapshot, "get_price_history_page", {"symbol": ticker, "as_of": as_of,
                     "full_history": True, "end_date": cursor}, envelope)
             if envelope["status"] != "ok":
                 break
             cursor = envelope["data"]["next_end_date"]
-    financial = get_fundamental_metrics(ticker, as_of=as_of, full_history=True)
+    financial = get_fundamental_metrics(ticker, as_of=as_of, full_history=True,
+                                        db_path=fact_db)
     _record(snapshot, "get_fundamental_metrics_history", {"ticker": ticker, "as_of": as_of,
             "full_history": True}, financial)
     snapshot["derived_facts"] = recompute_derived(snapshot)
@@ -395,7 +406,8 @@ def prepare_evidence(ticker: str, as_of: str, *, horizon: str = "mid"
         raise ValueError("conflicting tool facts")
     tier = HORIZON_RESOLUTIONS[horizon]
     tier_fields = list(TOOL_HISTORY_FIELDS["get_price_history"])
-    tier_view = history_view(snapshot, "get_price_history", tier, tier_fields)
+    tier_view = history_view(snapshot, "get_price_history", tier, tier_fields,
+                             db_path=price_db)
     _record(snapshot, "get_price_history_tier",
             {"symbol": ticker, "as_of": as_of, "resolution": tier, "fields": tier_fields},
             {**tier_view, "as_of": as_of})
@@ -478,7 +490,8 @@ def compact_tool_response(record: dict) -> dict:
                          "data": {"facts": shown, "gaps": gaps}})
 
 
-def history_view(snapshot: dict, tool: str, resolution: str, fields: list[str]) -> dict:
+def history_view(snapshot: dict, tool: str, resolution: str, fields: list[str],
+                 *, db_path: Path | str = DEFAULT_PRICE_DB) -> dict:
     if resolution not in RESOLUTIONS or tool not in {"get_price_history", "get_indicators"}:
         raise ValueError("unsupported history request")
     allowed = set(TOOL_HISTORY_FIELDS[tool])
@@ -507,7 +520,8 @@ def history_view(snapshot: dict, tool: str, resolution: str, fields: list[str]) 
                     facts.append(_shown(match))
         else:
             envelope = get_indicators(snapshot["ticker"], as_of=snapshot["as_of"],
-                                      full_history=True, limit=1, end_date=day)
+                                      full_history=True, limit=1, end_date=day,
+                                      db_path=db_path)
             selected = (envelope.get("data") or {}).get("rows", [])
             if selected and selected[0]["date"] == day:
                 compact = {**envelope, "data": {**envelope["data"], "rows": [{**selected[0],

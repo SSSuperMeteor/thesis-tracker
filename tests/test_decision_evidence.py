@@ -186,7 +186,7 @@ def test_historical_null_indicator_remains_a_visible_gap():
 def test_history_view_shows_null_reason_to_model(monkeypatch):
     snapshot, _, _ = prepare_evidence("AAPL", "2026-10-04")
 
-    def missing(symbol, *, as_of, full_history, limit, end_date):
+    def missing(symbol, *, as_of, full_history, limit, end_date, db_path=None):
         return {"status": "ok", "as_of": as_of, "data": {"rows": [{"date": end_date,
             "values": {"rsi_14": {"value": None, "fact_id": None, "unit": "index",
                                   "reason": {"code": "insufficient_history", "message": "根数不足。"}}}}],

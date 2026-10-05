@@ -13,8 +13,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from thesis_tracker.financial.pit_store import DEFAULT_FACT_DB
 from thesis_tracker.financial.tool import get_fundamental_metrics
 from thesis_tracker.indicator_tool import get_indicators
+from thesis_tracker.prices import DEFAULT_DB as DEFAULT_PRICE_DB
 from thesis_tracker.prices import get_price_history
 
 DISCLAIMER = "本卡为 AI 研究输出，不构成持牌投资建议。"
@@ -185,8 +187,15 @@ def data_gaps(snapshot: dict) -> list[dict]:
     return [gaps[key] for key in sorted(gaps)]
 
 
-def capture_snapshot(ticker: str, as_of: str) -> dict:
-    """Call the three local read-only tools with their defaults."""
+def capture_snapshot(ticker: str, as_of: str, *,
+                     price_db: Path | str = DEFAULT_PRICE_DB,
+                     fact_db: Path | str = DEFAULT_FACT_DB) -> dict:
+    """Call the three local read-only tools with their defaults.
+
+    The database paths default to the same module constants the tools use, so
+    omitting them is exactly the previous behaviour; passing them lets a caller
+    (the local web app's tests) point the same read-only path at another store.
+    """
     ticker = ticker.upper()
     date.fromisoformat(as_of)
     calls = []
@@ -196,7 +205,9 @@ def capture_snapshot(ticker: str, as_of: str) -> dict:
         ("get_fundamental_metrics", get_fundamental_metrics, "ticker"),
     ):
         args = {key: ticker, "as_of": as_of}
-        calls.append({"tool": name, "args": args, "envelope": function(ticker, as_of=as_of)})
+        extra = {"db_path": fact_db if name == "get_fundamental_metrics" else price_db}
+        calls.append({"tool": name, "args": args,
+                      "envelope": function(ticker, as_of=as_of, **extra)})
     snapshot = {"ticker": ticker, "as_of": as_of, "calls": calls}
     snapshot["fact_index"] = fact_index(snapshot)[0]
     return snapshot

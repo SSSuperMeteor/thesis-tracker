@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-import socket
 
 import pytest
+from webapp_fixtures import guard_offline
 
 from thesis_tracker.decision.core import (
     auto_computed,
@@ -57,11 +57,7 @@ def draft(snapshot, **overrides):
 
 @pytest.fixture
 def offline(monkeypatch):
-    def denied(*args, **kwargs):
-        raise AssertionError("network access attempted")
-
-    monkeypatch.setattr(socket.socket, "connect", denied)
-    monkeypatch.setattr(socket.socket, "connect_ex", denied)
+    guard_offline(monkeypatch)
 
 
 @pytest.fixture(scope="module")

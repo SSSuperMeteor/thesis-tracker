@@ -29,8 +29,10 @@ from thesis_tracker.decision.evidence import (
     history_view,
     prepare_evidence,
 )
+from thesis_tracker.financial.pit_store import DEFAULT_FACT_DB
 from thesis_tracker.financial.tool import get_fundamental_metrics
 from thesis_tracker.indicator_tool import get_indicators
+from thesis_tracker.prices import DEFAULT_DB as DEFAULT_PRICE_DB
 from thesis_tracker.prices import get_price_history
 
 MODEL = "deepseek-flash"
@@ -264,7 +266,8 @@ def _tool_error(code: str, message: str) -> dict:
 
 
 def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str,
-              snapshot: dict) -> tuple[dict | None, dict | None]:
+              snapshot: dict, *, price_db: Path | str = DEFAULT_PRICE_DB,
+              fact_db: Path | str = DEFAULT_FACT_DB) -> tuple[dict | None, dict | None]:
     if name not in _TOOLS:
         return None, _tool_error("unknown_tool",
                                  "只允许 get_price_history、get_indicators、get_fundamental_metrics 三个本地数据工具。")
@@ -334,7 +337,8 @@ def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str,
                                      f"字段 {', '.join(unsupported)} 不适用于 {name}；"
                                      f"{name} 支持：{', '.join(allowed)}。")
         try:
-            envelope = history_view(snapshot, name, resolution, fields)
+            envelope = history_view(snapshot, name, resolution, fields,
+                                    db_path=price_db)
         except ValueError:
             return None, _tool_error("invalid_tool_arguments",
                                      f"history 请求无效；{name} 支持 resolution "
@@ -354,7 +358,9 @@ def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str,
             "full_history": full_history, "end_date": end_date}
     try:
         envelope = _TOOLS[name](symbol, as_of=as_of, limit=limit,
-                                full_history=full_history, end_date=end_date)
+                                full_history=full_history, end_date=end_date,
+                                db_path=fact_db if name == "get_fundamental_metrics"
+                                else price_db)
     except (TypeError, ValueError, sqlite3.Error) as exc:
         return None, _tool_error("tool_failed", f"本地工具无法完成调用（{type(exc).__name__}）。")
     record = {"tool": name, "args": args, "envelope": envelope}
@@ -366,8 +372,22 @@ def _dispatch(name: str, raw_arguments: str, ticker: str, as_of: str,
 
 
 def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
-                 archive_path: Path | str = DEFAULT_ARCHIVE) -> dict:
-    """Run one bounded analysis. Only a validated card is archived and rendered."""
+                 archive_path: Path | str = DEFAULT_ARCHIVE,
+                 price_db: Path | str = DEFAULT_PRICE_DB,
+                 fact_db: Path | str = DEFAULT_FACT_DB,
+                 progress: Any = None) -> dict:
+    """Run one bounded analysis. Only a validated card is archived and rendered.
+
+    ``progress`` is an optional callable that receives small, JSON-safe event
+    dictionaries so a caller can show a step list.  It defaults to ``None`` and
+    changes nothing about the run when omitted: the emitted events are derived
+    from state that already exists, and a callback that raises is swallowed
+    rather than allowed to affect the analysis.
+
+    ``price_db``/``fact_db`` likewise default to the constants the read-only
+    tools already use, so the command-line entry point passes nothing and the
+    local web app can point the same path at another store.
+    """
     ticker = ticker.upper()
     if not re.fullmatch(r"[A-Z0-9.-]+", ticker):
         raise ValueError("invalid ticker")
@@ -375,7 +395,19 @@ def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
         raise ValueError("invalid horizon")
     date.fromisoformat(as_of)
     analysis_id = str(uuid.uuid4())
-    snapshot, base, catalog = prepare_evidence(ticker, as_of, horizon=horizon)
+
+    def emit(event: dict) -> None:
+        if progress is None:
+            return
+        try:
+            progress(event)
+        except Exception:
+            # A broken progress sink is a display problem, never a reason to
+            # abandon an analysis the user has already paid for.
+            pass
+
+    snapshot, base, catalog = prepare_evidence(ticker, as_of, horizon=horizon,
+                                               price_db=price_db, fact_db=fact_db)
     messages: list[dict] = [{"role": "system", "content": system_prompt(HORIZON_LABELS[horizon])},
                             {"role": "user", "content": json.dumps({"task": f"分析 {ticker}，as_of={as_of}。按需取历史，然后输出 JSON 建议卡。",
                                 "base_pack": base, "catalog": catalog}, ensure_ascii=False)}]
@@ -385,10 +417,27 @@ def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
              "base_pack_bytes": len(json.dumps(base, ensure_ascii=False).encode()),
              "catalog_bytes": len(catalog.encode()), "gate_reason": None}
     last_violations: list[dict] = []
+    reported_terminal = False
     _audit_connection(archive_path).close()
+    emit({"event": "prefetch", "tool_calls": stats["prefetch_calls"],
+          "base_pack_bytes": stats["base_pack_bytes"],
+          "catalog_bytes": stats["catalog_bytes"]})
 
     def reject(reason: str, violations: list[dict] | None = None) -> dict:
-        return {"status": "rejected", "reason": reason, "violations": violations or last_violations,
+        nonlocal reported_terminal
+        reported = last_violations if violations is None else violations
+        if reported_terminal:
+            return {"status": "rejected", "reason": reason, "violations": reported,
+                    "card": None, "card_id": None, "rendered": None, "snapshot": snapshot,
+                    "stats": stats, "analysis_id": analysis_id}
+        reported_terminal = True
+        emit({"event": "rejected", "reason": reason,
+              "rules": sorted({item["rule"] for item in reported}),
+              "rounds": stats["rounds"], "tool_calls": stats["tool_calls"],
+              "revisions": stats["revisions"], "input_tokens": stats["input_tokens"],
+              "output_tokens": stats["output_tokens"],
+              "cache_hit_tokens": stats["cache_hit_tokens"]})
+        return {"status": "rejected", "reason": reason, "violations": reported,
                 "card": None, "card_id": None, "rendered": None, "snapshot": snapshot,
                 "stats": stats, "analysis_id": analysis_id}
 
@@ -411,6 +460,10 @@ def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
             stats["gate_reason"] = "estimated_total_over_1_5m"
             return reject("token_limit", [_error("L03", "messages", "本轮预估输入超过累计硬上限；未发送请求。")])
         stats["rounds"] += 1
+        emit({"event": "round_start", "round": stats["rounds"],
+              "index": stats["rounds"], "input_tokens": stats["input_tokens"],
+              "output_tokens": stats["output_tokens"],
+              "cache_hit_tokens": stats["cache_hit_tokens"]})
         try:
             response = client.complete(messages=messages,
                                        tools=TOOL_SCHEMAS if stats["input_tokens"] + stats["output_tokens"] <= SOFT_TOTAL_TOKENS else [],
@@ -447,7 +500,9 @@ def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
             for item in calls:
                 stats["tool_calls"] += 1
                 function = item.get("function") or {}
-                record, error = _dispatch(function.get("name"), function.get("arguments"), ticker, as_of, snapshot)
+                record, error = _dispatch(function.get("name"), function.get("arguments"),
+                                          ticker, as_of, snapshot, price_db=price_db,
+                                          fact_db=fact_db)
                 if record is not None:
                     if not record.get("view_only"):
                         snapshot["calls"].append({key: record[key] for key in ("tool", "args", "envelope")})
@@ -476,6 +531,9 @@ def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
                 stats["tool_details"].append({"tool": function.get("name"),
                                                "args": audit_record["args"],
                                                "bytes": size, "status": payload["status"]})
+                emit({"event": "tool_call", "tool": function.get("name"),
+                      "args": audit_record["args"], "bytes": size,
+                      "status": payload["status"]})
                 messages.append({"role": "tool", "tool_call_id": item.get("id"),
                                  "content": json.dumps(payload, ensure_ascii=False)})
             continue
@@ -490,12 +548,22 @@ def run_analysis(ticker: str, as_of: str, *, horizon: str = "mid", client: Any,
                 violations = [_error("D00", "model_output", f"草稿结构无效（{type(exc).__name__}）。")]
         _append_attempt(archive_path, analysis_id, stats["revisions"] + 1, ticker, as_of,
                         raw, violations, not violations, HORIZON_LABELS[horizon])
+        if violations:
+            emit({"event": "draft_rejected", "attempt": stats["revisions"] + 1,
+                  "rules": sorted({item["rule"] for item in violations}),
+                  "violations": [{"rule": item["rule"], "location": item["location"],
+                                  "message": item["message"]} for item in violations]})
         if not violations and card is not None:
             meta = {"requested_model": MODEL, "returned_model": response.get("model"),
                     "fingerprint": response.get("system_fingerprint"), "prompt_version": PROMPT_VERSION,
                     "input_tokens": stats["input_tokens"], "output_tokens": stats["output_tokens"],
                     "cache_hit_tokens": stats["cache_hit_tokens"]}
             card_id = append_card(archive_path, card, snapshot, model=meta)
+            emit({"event": "passed", "card_id": card_id, "rounds": stats["rounds"],
+                  "tool_calls": stats["tool_calls"], "revisions": stats["revisions"],
+                  "input_tokens": stats["input_tokens"],
+                  "output_tokens": stats["output_tokens"],
+                  "cache_hit_tokens": stats["cache_hit_tokens"]})
             return {"status": "passed", "reason": None, "violations": [], "card": card,
                     "card_id": card_id, "rendered": render_card(card, snapshot),
                     "snapshot": snapshot, "stats": stats, "analysis_id": analysis_id}

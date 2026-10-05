@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import socket
 import sqlite3
 import tempfile
 from dataclasses import dataclass
@@ -146,6 +147,39 @@ REJECTED_RULES = (
 )
 
 CARD_CREATED_AT = "2026-10-05T00:44:06+00:00"
+
+
+def guard_offline(monkeypatch):
+    """Block every socket connect that is not this machine's own loopback.
+
+    The guard has to be loopback-aware rather than a blanket denial: patching
+    ``socket.socket.connect`` out entirely is process-global state that leaks
+    past the test that set it up (``monkeypatch`` tracks the attribute, but
+    assigning it still mutates the live class), which breaks any later test
+    that talks to a locally bound server.
+    """
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def _loopback(address) -> bool:
+        if not isinstance(address, tuple) or not address:
+            return False
+        host = address[0]
+        return host in {"127.0.0.1", "::1", "localhost"} or (
+            isinstance(host, str) and host.startswith("127."))
+
+    def connect(self, address):
+        if _loopback(address):
+            return real_connect(self, address)
+        raise AssertionError("external network access attempted")
+
+    def connect_ex(self, address):
+        if _loopback(address):
+            return real_connect_ex(self, address)
+        raise AssertionError("external network access attempted")
+
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
 
 
 @dataclass(frozen=True, slots=True)

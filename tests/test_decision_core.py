@@ -5,11 +5,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import socket
 import sqlite3
 from datetime import date
 
 import pytest
+from webapp_fixtures import guard_offline
 
 from thesis_tracker.decision.cli import main as snapshot_main
 from thesis_tracker.decision.core import (
@@ -25,11 +25,7 @@ from thesis_tracker.decision.core import (
 
 @pytest.fixture
 def offline(monkeypatch):
-    def denied(*args, **kwargs):
-        raise AssertionError("network access attempted")
-
-    monkeypatch.setattr(socket.socket, "connect", denied)
-    monkeypatch.setattr(socket.socket, "connect_ex", denied)
+    guard_offline(monkeypatch)
 
 
 @pytest.fixture
