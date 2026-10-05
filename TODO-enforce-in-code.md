@@ -99,6 +99,8 @@ discovery 层能不能拿到一个经过验证的真实 regression case。
 | 买入/分批/持有缺少止损或目标依据 | D12；`test_d12_requires_rationale_with_a_fact_placeholder` |
 | 卡片周期与命令行请求不一致 | D13；`test_d13_card_horizon_must_equal_the_requested_horizon` |
 | 观望动作的价位必须全空 | D05；`test_watch_with_prices_is_rejected`、配对矩阵 |
+| 买入/分批的现价必须落在买点区间内 | D14；`test_d14_*`（端点、上下越界、各动作适用范围） |
+| 买入/分批/持有的止损必须等于第一条 close_below 阈值 | D15；`test_d15_*`（多条失效条件时的匹配） |
 
 ## 尚未由代码强制（2026-10-04）
 
@@ -119,6 +121,9 @@ discovery 层能不能拿到一个经过验证的真实 regression case。
 
 真实 API 的三标的验证仍待定：2026-10-04 AAPL 首次调用已越过本轮 500k token
 总预算，因此本轮禁止继续调用 NVDA/TSLA。此为实测限制，不代表这些标的已验证。
+
+2026-10-04 第四轮补充：校验器升到 `decision-validator-3`，新增 D14（现价必须在买点区间内）
+与 D15（止损必须等于第一条 close_below 阈值）；v1 回放跳过 D12–D15，v2 回放跳过 D14/D15。
 
 2026-10-04 第三轮补充：`analyze` 新增 `--horizon short|mid|long`（默认 `mid`），
 预取档位与卡片周期一致性由 D13 强制；校验器版本升到 `decision-validator-2`，

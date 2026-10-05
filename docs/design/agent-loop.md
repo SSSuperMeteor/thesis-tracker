@@ -43,9 +43,13 @@ resolution 与该工具支持的 fields。工具 schema 不含 `as_of`；若模�
 
 ## 3. 对话、修正与限额（已定）
 
-系统提示词版本 `decision-agent-v4-horizon-rules-2026-10-04`（v3 → v4 加入动作一致性、
-止损/目标依据、趋势描述需历史事实、周期侧重，并把 `entry_range` 的数组形状写进示例；
-未放宽任何校验规则）。模型须给明确倾向和动作，
+系统提示词版本 `decision-agent-v5-entry-stop-rules-2026-10-04`。v4 → v5 只改四点，各有证据：
+把本次请求的周期写进提示词并要求 `horizon` 等于它（对应 AAPL 第 2 稿 D13）；
+加一组 D02 正例/反例并点明“200 日线”“63 日”这类窗口天数也算裸数字
+（对应 NVDA 6 条、更早 TSLA 6 条 D02）；写明买入/分批现价必须在买点区间内、止损必须等于
+第一条 `close_below` 阈值、失效条件文字只是对机器条件的说明（对应新规则 D14/D15）；
+补一句 JSON 必须完整闭合、`fact_ids` 不要堆成长列表（对应 AAPL 第 1 稿 D00：JSON 在
+`fact_ids` 数组中间被截断）。未放宽任何校验规则。模型须给明确倾向和动作，
 适用的买点、止损、目标位，至少一条可机器检查的收盘价失效条件；
 事实数字只通过 `fact_id` 和 `{fact:<id>}` 占位符表达。
 买入、分批、持有还须给出 `stop_rationale` 与 `target_rationale`（各含一个事实占位符）；
@@ -272,7 +276,54 @@ D11（理由正文动作一致）、D12（止损/目标依据）、D13（周期�
 `d247434ddd8ed2086dda4a73cca51e5b7f144cf6e6d8d3a7bacfc446b3ffe237`。
 AAPL 57 / NVDA 58 个 `fact_id` 逐项不变、0 冲突。
 
-## 10. 后续待定（待定）
+## 10. 第四轮：第二批真实卡复核（已定记录，2026-10-04）
+
+本轮**没有任何真实 API 调用**：Harness 环境读不到 `DEEPSEEK_API_KEY`，真实运行由用户在自己的
+终端执行。以下全部来自 `data/decisions/cards.db` 的存档记录、源码只读核实与离线回放。
+
+### 10.1 三张 v4 真实卡的违规汇总（已定）
+
+| 运行 | 标的 | 周期 | 稿次 | 违规 |
+|---|---|---|---|---|
+| `c2658304` | AAPL | 短期 | 1 | `D00 / model_output`：输出不是有效 JSON。raw 3431 字节，`json.loads` 报 `Unterminated string starting at line 1 column 3397` —— JSON 在 `fact_ids` 数组中间、一个未闭合字符串处结束（末尾是 `"sec_metric|AAPL|net_debt_to_ebitda`） |
+| | | | 2 | `D13 / horizon`：`horizon` 字段写成 `中期`，请求周期是 `短期` |
+| | | | 3 | 通过 |
+| `d1ab4f31` | NVDA | 长期 | 1 | `D02` ×6：`reasons[1]`（事实数字未用占位符）、`reasons[2]`、`invalidations[0]`、`invalidations[1]`、`stop_rationale`、`target_rationale`（裸数字，多为“63 日/252 日/200 日”这类窗口天数） |
+| | | | 2 | 通过 |
+| `44dac4e2` | TSLA | 中期 | 1 | 无（一次通过，动作观望） |
+
+### 10.2 单轮输出上限：有无被截断的证据（已定）
+
+- `agent.py` 发给 API 的 `max_tokens = min(8192, remaining - estimated_input)`。
+- `decision_model_calls` 表**没有** `finish_reason` 或等价字段（列为 `model_call_id`、
+  `analysis_id`、`round_no`、`requested_model`、`returned_model`、`fingerprint`、
+  `input_tokens`、`output_tokens`、`cache_hit_tokens`、`created_at`）。`DeepSeekClient.complete`
+  返回了 `finish_reason`，但 `run_analysis` 没有落库。
+- 观测到的 `completion_tokens`：AAPL 第 2 轮 **8192**（正好等于配置上限），
+  NVDA 第 2 轮 **8103**（不是上限）。
+- **结论：没有明确证据证明被截断。** 8192 只是"等于上限"这一可疑事实；同一轮的 `content`
+  是完整可解析的 JSON（被解析出来并因 D13 被拒），说明内容本身闭合；没有 `finish_reason`
+  就无法区分 `stop` 与 `length`。
+- 因此**本轮不改 `max_tokens`**。若要拿到证据，最小改动是给 `decision_model_calls`
+  增加一列记录 `finish_reason`，留待有真实运行的一轮。
+
+### 10.3 价格库刷新机制（只读核实，未改代码）（已定）
+
+`ingest_price_history`（`prices.py:176`）对每个 symbol：
+
+- **跳过**的唯一条件是已存窗口完全覆盖请求窗口
+  （`stored_start <= start_date and stored_end >= end_date`），此时不发请求；
+- 否则按 union 窗口 `[min(start_date, stored_start), max(end_date, stored_end)]`
+  **整段重抓**，并且先 `DELETE FROM daily_prices / price_windows WHERE symbol=?` 再整段插入 ——
+  **不是增量追加**。
+- `prices_batch.run_batch` 每次最多 `max_requests=10` 个请求，CLI 未暴露该参数；
+  universe 是 15 个 ticker + SPY = 16，所以一次跑不完，需要跑两次。
+
+刷新命令：`uv run prices-ingest`，再重复一次（第二次会跳过已刷新的 10 个、处理剩下 6 个）。
+D03 要求价格 `data_end_date` 与 `as_of` 相差不超过 5 个日历日，因此需要定期手动刷新，
+否则 `analyze` 会因数据过期被拒。
+
+## 11. 后续待定（待定）
 
 后续真实验证需再次从 AAPL 开始：确认模型在 SPY/分档参数被拒后能改用目标 ticker 的
 分档请求，并跑完一轮出卡；本轮没有取得通过的真实卡，也没有真实 token 消耗。
